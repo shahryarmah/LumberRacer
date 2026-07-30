@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
-//|                                              ShinMim V1.06.mq5   |
+//|                                              ShinMim V1.07.mq5   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "1.06"
+#property version   "1.07"
 #property indicator_chart_window
 
 // این اندیکاتور فقط با آبجکت‌های گرافیکی کار می‌کند و هیچ بافری ندارد،
@@ -145,14 +145,20 @@ void DeleteLiveObjectsOfTF(TFCategory cat, ENUM_TIMEFRAMES tf)
    DeleteByPrefix(GetTFPrefix(cat, tf) + "L_");
 }
 
-// حذف تمام آبجکت های رسم شده توسط اندیکاتور (برای پاکسازی کامل)
-void DeleteAllDrawObjects()
+// پاکسازی آبجکت های نسخه های قدیمی تر.
+// نام گذاری قبل از 1.06 شامل "_TF" بود و نام گذاری فعلی هرگز "_TF" تولید نمی‌کند،
+// پس این فیلتر فقط باقیمانده های قدیمی را می‌گیرد.
+// نکته مهم: اینجا نباید همه آبجکت ها پاک شوند. متاتریدر با هر تغییر تایم فریم
+// چارت دوباره OnInit را صدا می‌زند و پاکسازی کامل، آبجکت های تایم فریم بالاتر را
+// که باید روی تایم فریم پایین تر باقی بمانند از بین می‌برد.
+void DeleteLegacyObjects()
 {
    int total = ObjectsTotal(0);
    for(int i = total - 1; i >= 0; i--)
    {
       string name = ObjectName(0, i);
-      if(StringFind(name, "st_") == 0 || StringFind(name, "tr_") == 0 || StringFind(name, "en_") == 0)
+      bool isOurs = (StringFind(name, "st_") == 0 || StringFind(name, "tr_") == 0 || StringFind(name, "en_") == 0);
+      if(isOurs && StringFind(name, "_TF") >= 0)
          ObjectDelete(0, name);
    }
 }
@@ -327,7 +333,8 @@ void CreateTFButton(string name, int x, int y, string text)
    ObjectSetString(0, name, OBJPROP_TEXT, text);
 }
 
-static ulong lastClickTime = 0;
+static ulong lastClickTime       = 0;   // ضد لرزش کلیک روی آبجکت های ما
+static ulong lastObjectClickTime = 0;   // زمان آخرین کلیک پردازش شده روی آبجکت های ما
 //+------------------------------------------------------------------+
 
 int OnInit()
@@ -370,8 +377,8 @@ int OnInit()
    prevTriggerTF   = TriggerTF;
    prevEntryTF     = EntryTF;
 
-   // پاکسازی آبجکت های باقی مانده از اجرای قبلی (از جمله نسخه های قدیمی تر)
-   DeleteAllDrawObjects();
+   // فقط باقیمانده نسخه های قدیمی تر پاک می‌شود، نه همه آبجکت ها
+   DeleteLegacyObjects();
 
    // ساخت دکمه ها با نام یکتا
    CreateTFButton("BtnStructure_" + chartIDStr, 10, 10, "STRUCT: " + TFToStr(StructureTF));
@@ -481,61 +488,35 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
          ChartRedraw();
          return;
       }
-      lastClickTime = now;
+      lastClickTime       = now;
+      lastObjectClickTime = now;
 
       if(sparam == btnStructName)
       {
          if(currentListCategory != STRUCTURE) HideTFList(currentListCategory);
-         if(isStructureListOpen)
-         {
-            HideTFList(STRUCTURE);
-            isStructureListOpen = false;
-            currentListCategory = NONE;
-         }
-         else
-         {
-            ShowTFList(STRUCTURE, 140, 10);
-            isStructureListOpen = true;
-            isTriggerListOpen   = false;
-            isEntryListOpen     = false;
-            currentListCategory = STRUCTURE;
-         }
+         if(!isStructureListOpen) ShowTFList(STRUCTURE, 140, 10);
+         isStructureListOpen = true;
+         isTriggerListOpen   = false;
+         isEntryListOpen     = false;
+         currentListCategory = STRUCTURE;
       }
       else if(sparam == btnTrigName)
       {
          if(currentListCategory != TRIGGER) HideTFList(currentListCategory);
-         if(isTriggerListOpen)
-         {
-            HideTFList(TRIGGER);
-            isTriggerListOpen = false;
-            currentListCategory = NONE;
-         }
-         else
-         {
-            ShowTFList(TRIGGER, 140, 10);
-            isTriggerListOpen   = true;
-            isStructureListOpen = false;
-            isEntryListOpen     = false;
-            currentListCategory = TRIGGER;
-         }
+         if(!isTriggerListOpen) ShowTFList(TRIGGER, 140, 10);
+         isTriggerListOpen   = true;
+         isStructureListOpen = false;
+         isEntryListOpen     = false;
+         currentListCategory = TRIGGER;
       }
       else if(sparam == btnEntryName)
       {
          if(currentListCategory != ENTRY) HideTFList(currentListCategory);
-         if(isEntryListOpen)
-         {
-            HideTFList(ENTRY);
-            isEntryListOpen = false;
-            currentListCategory = NONE;
-         }
-         else
-         {
-            ShowTFList(ENTRY, 140, 10);
-            isEntryListOpen     = true;
-            isStructureListOpen = false;
-            isTriggerListOpen   = false;
-            currentListCategory = ENTRY;
-         }
+         if(!isEntryListOpen) ShowTFList(ENTRY, 140, 10);
+         isEntryListOpen     = true;
+         isStructureListOpen = false;
+         isTriggerListOpen   = false;
+         currentListCategory = ENTRY;
       }
       else if(StringFind(sparam, "ListSt_") == 0)
       {
@@ -567,6 +548,12 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
 
    if(id == CHARTEVENT_CLICK)
    {
+      // کلیک روی دکمه های خود اندیکاتور علاوه بر CHARTEVENT_OBJECT_CLICK یک
+      // CHARTEVENT_CLICK هم تولید می‌کند. بدون این محافظ، لیستی که همین الان
+      // با کلیک روی دکمه باز شده، بلافاصله با رویداد دوم بسته می‌شود.
+      if(GetMicrosecondCount() - lastObjectClickTime < 300000)   // 0.3 ثانیه
+         return;
+
       if(currentListCategory != NONE)
       {
          HideTFList(currentListCategory);
