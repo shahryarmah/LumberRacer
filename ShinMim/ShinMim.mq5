@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
-//|                                              ShinMim V1.09.mq5   |
+//|                                              ShinMim V1.10.mq5   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "1.09"
+#property version   "1.10"
 #property indicator_chart_window
 
 // این اندیکاتور فقط با آبجکت‌های گرافیکی کار می‌کند و هیچ بافری ندارد،
@@ -69,6 +69,10 @@ input int    BreakMaxCandles      = 3;     // ترکیب حداکثر چند ک�
 input bool   ShowEntrySignal      = true;  // نمایش فلش سیگنال ورود
 input bool   EnableAlerts         = false; // هشدار در لحظات کلیدی
 
+//---- تایمر کندل
+input bool   ShowCandleTimer      = true;      // نمایش زمان باقی مانده تا بسته شدن کندل
+input color  CandleTimerColor     = clrGray;   // رنگ تایمر
+
 //+------------------------------------------------------------------+
 enum TFCategory { STRUCTURE, TRIGGER, ENTRY, NONE };
 
@@ -102,6 +106,7 @@ struct SwingAB
    datetime timeC;
    double   priceC;
 
+   bool     hasValidBreak; // کندل شکست معتبر تایید شده است
    int      idxBreakFrom;  // اولین کندل شکست (برای کندل مرکب)
    int      idxBreakTo;    // آخرین کندل شکست
    datetime timeBreak;
@@ -381,6 +386,46 @@ void CreateTFButton(string name, int x, int y, string text)
 
 static ulong lastClickTime       = 0;   // ضد لرزش کلیک روی آبجکت های ما
 static ulong lastObjectClickTime = 0;   // زمان آخرین کلیک پردازش شده روی آبجکت های ما
+
+//+------------------------------------------------------------------+
+// زمان باقی مانده تا بسته شدن کندل جاری، زیر دکمه ها.
+// هر ثانیه از OnTimer بروز می‌شود، پس روی هر تایم فریمی کار می‌کند.
+void UpdateCandleTimer()
+{
+   string name = "ShinMim_Timer_" + IntegerToString(ChartID());
+
+   if(!ShowCandleTimer)
+   {
+      if(ObjectFind(0, name) >= 0) ObjectDelete(0, name);
+      return;
+   }
+
+   datetime barTime = iTime(_Symbol, _Period, 0);
+   if(barTime == 0) return;
+
+   long remain = (long)(barTime + PeriodSeconds(_Period)) - (long)TimeCurrent();
+   if(remain < 0) remain = 0;
+
+   int hh = (int)(remain / 3600);
+   int mm = (int)((remain % 3600) / 60);
+   int ss = (int)(remain % 60);
+
+   string txt = (hh > 0) ? StringFormat("%02d:%02d:%02d", hh, mm, ss)
+                         : StringFormat("%02d:%02d", mm, ss);
+
+   if(ObjectFind(0, name) < 0)
+   {
+      ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
+      ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+      ObjectSetInteger(0, name, OBJPROP_XDISTANCE, 10);
+      ObjectSetInteger(0, name, OBJPROP_YDISTANCE, 100);
+      ObjectSetInteger(0, name, OBJPROP_FONTSIZE, 11);
+      ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+   }
+
+   ObjectSetInteger(0, name, OBJPROP_COLOR, CandleTimerColor);
+   ObjectSetString(0, name, OBJPROP_TEXT, TFToStr((ENUM_TIMEFRAMES)Period()) + "  " + txt);
+}
 //+------------------------------------------------------------------+
 
 int OnInit()
@@ -430,6 +475,7 @@ int OnInit()
 
    EventSetTimer(1);
 
+   UpdateCandleTimer();
    ChartRedraw();
    return(INIT_SUCCEEDED);
 }
@@ -663,8 +709,11 @@ int CollectSwings(MqlRates &rates[], int rates_total, int scanFrom, SwingAB &out
 
          if(nonStd > MaxNonStandard) continue;
 
-         bool isBullish = (bearCount <= MaxOppositeCandles);
-         bool isBearish = (bullCount <= MaxOppositeCandles);
+         // سویینگ باید حداقل MinCandles کندل «هم جهت» داشته باشد، نه اینکه فقط
+         // پنجره ای به طول MinCandles با چند کندل مخالف باشد. بدون شرط دوم،
+         // پنجره 3 کندلی با 1 کندل مخالف عملا فقط 2 کندل هم جهت دارد.
+         bool isBullish = (bearCount <= MaxOppositeCandles && bullCount >= MinCandles);
+         bool isBearish = (bullCount <= MaxOppositeCandles && bearCount >= MinCandles);
          if(!isBullish && !isBearish) continue;
 
          int startIdx = i - len + 1;
@@ -674,12 +723,13 @@ int CollectSwings(MqlRates &rates[], int rates_total, int scanFrom, SwingAB &out
          int    idxA = startIdx, idxB = startIdx;
          double priceA = 0.0, priceB = 0.0;
 
+         // A باید «اولین کندل سویینگ» باشد، نه پایین ترین کف داخل پنجره.
+         // کندل های مخالف جهت که ابتدای پنجره افتاده اند کنار گذاشته می‌شوند.
          if(isBullish)
          {
-            double minLow = rates[startIdx].low;
-            for(int m = startIdx; m <= endIdx; m++)
-               if(rates[m].low < minLow) { minLow = rates[m].low; idxA = m; }
-            priceA = minLow;
+            idxA = startIdx;
+            while(idxA < endIdx && rates[idxA].close <= rates[idxA].open) idxA++;
+            priceA = rates[idxA].low;
 
             double maxHigh = rates[idxA].high;
             idxB = idxA;
@@ -689,10 +739,9 @@ int CollectSwings(MqlRates &rates[], int rates_total, int scanFrom, SwingAB &out
          }
          else
          {
-            double maxHighLocal = rates[startIdx].high;
-            for(int m = startIdx; m <= endIdx; m++)
-               if(rates[m].high > maxHighLocal) { maxHighLocal = rates[m].high; idxA = m; }
-            priceA = maxHighLocal;
+            idxA = startIdx;
+            while(idxA < endIdx && rates[idxA].close >= rates[idxA].open) idxA++;
+            priceA = rates[idxA].high;
 
             double minLowLocal = rates[idxA].low;
             idxB = idxA;
@@ -730,6 +779,7 @@ int CollectSwings(MqlRates &rates[], int rates_total, int scanFrom, SwingAB &out
          out[cnt].idxC         = -1;
          out[cnt].timeC        = 0;
          out[cnt].priceC       = 0.0;
+         out[cnt].hasValidBreak = false;
          out[cnt].idxBreakFrom = -1;
          out[cnt].idxBreakTo   = -1;
          out[cnt].timeBreak    = 0;
@@ -891,28 +941,14 @@ void EvaluateLifecycle(SwingAB &s, MqlRates &rates[], int rates_total, double av
 
       if(s.state == AB_RETRACED)
       {
-         // دنبال کندل شکست معتبر (تکی یا مرکب از 2 تا BreakMaxCandles کندل)
-         for(int n = 1; n <= BreakMaxCandles; n++)
-         {
-            int from = m - n + 1;
-            if(from <= s.idxC) break;   // کندل مرکب نباید از C عقب تر برود
+         // همینکه قیمت از سطح B رد شود یعنی نقدینگی برداشته شده — مستقل از
+         // اینکه کندل شکست معتبر باشد یا نه. اعتبار کندل شکست جداگانه بررسی
+         // می‌شود و فقط سیگنال ورود را مسلح می‌کند.
+         bool crossedB = s.isBull ? (rates[m].high > s.priceB) : (rates[m].low < s.priceB);
+         if(!crossedB) continue;
 
-            Composite c;
-            BuildComposite(rates, from, m, c);
-
-            if(IsValidBreak(c, s.isBull, s.priceB, s.size, avgRange))
-            {
-               s.state        = AB_BROKEN;
-               s.idxBreakFrom = from;
-               s.idxBreakTo   = m;
-               s.timeBreak    = rates[m].time;
-               s.breakHigh    = c.high;
-               s.breakLow     = c.low;
-               s.priceD       = s.isBull ? c.high : c.low;
-               break;
-            }
-         }
-         continue;
+         s.state  = AB_BROKEN;
+         s.priceD = s.isBull ? rates[m].high : rates[m].low;
       }
 
       if(s.state == AB_BROKEN)
@@ -928,9 +964,34 @@ void EvaluateLifecycle(SwingAB &s, MqlRates &rates[], int rates_total, double av
             return;
          }
 
-         // سیگنال ورود: کندلی که آن طرف کندل شکست بسته شود
-         if(s.idxSignal < 0)
+         if(!s.hasValidBreak)
          {
+            // دنبال کندل شکست معتبر (تکی یا مرکب از 2 تا BreakMaxCandles کندل)
+            for(int n = 1; n <= BreakMaxCandles; n++)
+            {
+               int from = m - n + 1;
+               if(from <= s.idxC) break;   // کندل مرکب نباید از C عقب تر برود
+
+               Composite c;
+               BuildComposite(rates, from, m, c);
+
+               if(IsValidBreak(c, s.isBull, s.priceB, s.size, avgRange))
+               {
+                  s.hasValidBreak = true;
+                  s.idxBreakFrom  = from;
+                  s.idxBreakTo    = m;
+                  s.timeBreak     = rates[m].time;
+                  s.breakHigh     = c.high;
+                  s.breakLow      = c.low;
+                  break;
+               }
+            }
+         }
+         else if(s.idxSignal < 0)
+         {
+            // سیگنال ورود: کندلی که آن طرف کندل شکست بسته شود.
+            // else یعنی روی خود کندل شکست بررسی نمی‌شود؛ یک کندل نمی‌تواند
+            // آن طرف خودش بسته شود.
             bool signalled = s.isBull ? (rates[m].close < s.breakLow)
                                       : (rates[m].close > s.breakHigh);
             if(signalled)
@@ -973,14 +1034,15 @@ int ReduceSwings(SwingAB &src[], int n, SwingAB &dst[])
 }
 
 //+------------------------------------------------------------------+
-string StateText(ABState st)
+string StateText(SwingAB &s)
 {
-   switch(st)
+   switch(s.state)
    {
       case AB_FORMING:      return "...";
       case AB_WAIT_RETRACE: return "WAIT";
       case AB_RETRACED:     return "C ok";
-      case AB_BROKEN:       return "HUNT";
+      // HUNT یعنی قیمت از B رد شد؛ BREAK یعنی کندل شکست هم معتبر بود
+      case AB_BROKEN:       return s.hasValidBreak ? "BREAK" : "HUNT";
       case AB_DONE:         return "DONE";
       case AB_INVALID:      return "X";
    }
@@ -1112,7 +1174,7 @@ void DrawSwing(SwingAB &s, TFCategory cat, ENUM_TIMEFRAMES tf, color drawColor, 
    }
 
    // --- علامت کندل شکست
-   if(s.state == AB_BROKEN && s.idxBreakTo >= 0)
+   if(s.hasValidBreak && s.idxBreakTo >= 0)
    {
       string brkName = base + "_BRK";
       if(ObjectFind(0, brkName) >= 0) ObjectDelete(0, brkName);
@@ -1143,7 +1205,7 @@ void DrawSwing(SwingAB &s, TFCategory cat, ENUM_TIMEFRAMES tf, color drawColor, 
       ObjectCreate(0, stName, OBJ_TEXT, 0, bEnd, s.priceB);
       ObjectSetInteger(0, stName, OBJPROP_COLOR, drawColor);
       ObjectSetInteger(0, stName, OBJPROP_FONTSIZE, 8);
-      ObjectSetString(0, stName, OBJPROP_TEXT, "  " + StateText(s.state));
+      ObjectSetString(0, stName, OBJPROP_TEXT, "  " + StateText(s));
    }
 }
 
@@ -1161,7 +1223,7 @@ void MaybeAlert(SwingAB &s, TFCategory cat, ENUM_TIMEFRAMES tf, int rates_total)
 
    if(s.idxSignal == lastClosed)
       Alert("ShinMim ", tag, ": سیگنال ورود");
-   else if(s.state == AB_BROKEN && s.idxBreakTo == lastClosed)
+   else if(s.hasValidBreak && s.idxBreakTo == lastClosed)
       Alert("ShinMim ", tag, ": شکست سطح B - برو تایم پایین تر");
    else if(s.state == AB_RETRACED && s.idxC == lastClosed)
       Alert("ShinMim ", tag, ": اصلاح معتبر شد (C)");
@@ -1317,6 +1379,8 @@ void OnTimer()
 {
    // برای وقتی که بازار تیک ندارد ولی کندل بسته می‌شود یا کاربر تایم فریم را عوض کرده
    ProcessIndicator();
+   UpdateCandleTimer();
+   ChartRedraw();
 }
 
 //+------------------------------------------------------------------+
@@ -1340,7 +1404,8 @@ void OnDeinit(const int reason)
             StringFind(name, "BtnStructure_") == 0 ||
             StringFind(name, "BtnTrigger_") == 0 ||
             StringFind(name, "BtnEntry_") == 0 ||
-            StringFind(name, "ShinMim_State_") == 0)
+            StringFind(name, "ShinMim_State_") == 0 ||
+            StringFind(name, "ShinMim_Timer_") == 0)
          {
             ObjectDelete(0, name);
          }
