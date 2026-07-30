@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
-//|                                              ShinMim V1.10.mq5   |
+//|                                              ShinMim V1.11.mq5   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "1.10"
+#property version   "1.11"
 #property indicator_chart_window
 
 // این اندیکاتور فقط با آبجکت‌های گرافیکی کار می‌کند و هیچ بافری ندارد،
@@ -33,7 +33,7 @@ input int    MaxLookbackEntry     = 30;   // تعداد کندل برای ورو
 input int    MinCandles           = 3;
 input int    MaxCandles           = 10;
 input int    MaxOppositeCandles   = 1;
-input double MinBodyPercent       = 0.1;
+input double MinBodyPercent       = 50.0;  // حداقل درصد بادی کندل (0 تا 100)
 input int    MaxNonStandard       = 1;
 input int    LineBLength          = 10;   // طول خط ادامه از B (بر حسب کندل)
 input int    LineMidLength        = 15;   // طول خط میانی (بر حسب کندل)
@@ -45,7 +45,10 @@ input int    LabelShiftCandles    = 1;    // تعداد کندل شیفت لیب
 
 //---- تنظیمات نمایش AB
 input bool   ShowPreviousABs      = false; // نمایش AB های قبلی (وقتی ABCD خاموش است)
-input int    SwingLookAhead       = 3;     // جستجوی B تا چند کندل بعد از پنجره
+
+//---- مومنتم سویینگ
+input double MomentumMinPercent   = 60.0;  // حداقل درصد AB که باید با بدنه پوشیده شود
+input int    MaxNonProgressive    = 1;     // چند کندل مجاز است سقف بالاتر از کندل قبل نسازد
 
 //---- چرخه عمر الگو ABCD
 input bool   EnableABCD           = true;  // ردیابی چرخه عمر و اعتبارسنجی الگو
@@ -718,7 +721,6 @@ int CollectSwings(MqlRates &rates[], int rates_total, int scanFrom, SwingAB &out
 
          int startIdx = i - len + 1;
          int endIdx   = i;
-         int maxCheck = (int)MathMin(rates_total - 1, endIdx + SwingLookAhead);
 
          int    idxA = startIdx, idxB = startIdx;
          double priceA = 0.0, priceB = 0.0;
@@ -727,27 +729,43 @@ int CollectSwings(MqlRates &rates[], int rates_total, int scanFrom, SwingAB &out
          // کندل های مخالف جهت که ابتدای پنجره افتاده اند کنار گذاشته می‌شوند.
          if(isBullish)
          {
-            idxA = startIdx;
             while(idxA < endIdx && rates[idxA].close <= rates[idxA].open) idxA++;
             priceA = rates[idxA].low;
-
-            double maxHigh = rates[idxA].high;
-            idxB = idxA;
-            for(int m = idxA; m <= maxCheck; m++)
-               if(rates[m].high > maxHigh) { maxHigh = rates[m].high; idxB = m; }
-            priceB = maxHigh;
          }
          else
          {
-            idxA = startIdx;
             while(idxA < endIdx && rates[idxA].close >= rates[idxA].open) idxA++;
             priceA = rates[idxA].high;
+         }
 
-            double minLowLocal = rates[idxA].low;
-            idxB = idxA;
-            for(int m = idxA; m <= maxCheck; m++)
-               if(rates[m].low < minLowLocal) { minLowLocal = rates[m].low; idxB = m; }
-            priceB = minLowLocal;
+         // B تا «اولین اصلاح معنادار» جلو می‌رود، نه فقط چند کندل ثابت.
+         // با جستجوی ثابت، سقفی که کمی دیرتر ساخته می‌شد از دست می‌رفت.
+         // اصلاح با بادی سنجیده می‌شود، نه با سایه.
+         idxB   = idxA;
+         priceB = isBullish ? rates[idxA].high : rates[idxA].low;
+
+         for(int m = idxA + 1; m < rates_total; m++)
+         {
+            if(isBullish)
+            {
+               if(rates[m].high > priceB) { priceB = rates[m].high; idxB = m; continue; }
+               double swing = priceB - priceA;
+               if(swing > 0.0)
+               {
+                  double bodyLow = MathMin(rates[m].open, rates[m].close);
+                  if((priceB - bodyLow) >= swing * RetraceMinPercent / 100.0) break;
+               }
+            }
+            else
+            {
+               if(rates[m].low < priceB) { priceB = rates[m].low; idxB = m; continue; }
+               double swing = priceA - priceB;
+               if(swing > 0.0)
+               {
+                  double bodyHigh = MathMax(rates[m].open, rates[m].close);
+                  if((bodyHigh - priceB) >= swing * RetraceMinPercent / 100.0) break;
+               }
+            }
          }
 
          if(idxA == idxB) continue;
@@ -765,6 +783,30 @@ int CollectSwings(MqlRates &rates[], int rates_total, int scanFrom, SwingAB &out
          double abLength = MathAbs(priceB - priceA);
          if(abLength < MinABRatio * avgRange || abLength > MaxABRatio * avgRange)
             continue;
+
+         // --- مومنتم 1: حرکت باید پله ای باشد، یعنی هر کندل سقف بالاتری از
+         //     کندل قبل بسازد (برای نزولی: کف پایین تر). این شرط حرکت درهم را رد می‌کند.
+         int nonProgressive = 0;
+         for(int m = idxA + 1; m <= idxB; m++)
+         {
+            bool progressed = isBullish ? (rates[m].high > rates[m-1].high)
+                                        : (rates[m].low  < rates[m-1].low);
+            if(!progressed) nonProgressive++;
+         }
+         if(nonProgressive > MaxNonProgressive) continue;
+
+         // --- مومنتم 2: گستره بدنه ها باید بخش عمده طول AB را بپوشاند.
+         //     این شرط ABی را رد می‌کند که طولش از یک سایه بلند ساخته شده باشد.
+         double bodyLo = MathMin(rates[idxA].open, rates[idxA].close);
+         double bodyHi = MathMax(rates[idxA].open, rates[idxA].close);
+         for(int m = idxA; m <= idxB; m++)
+         {
+            double lo = MathMin(rates[m].open, rates[m].close);
+            double hi = MathMax(rates[m].open, rates[m].close);
+            if(lo < bodyLo) bodyLo = lo;
+            if(hi > bodyHi) bodyHi = hi;
+         }
+         if((bodyHi - bodyLo) < abLength * MomentumMinPercent / 100.0) continue;
 
          out[cnt].idxA         = idxA;
          out[cnt].idxB         = idxB;
@@ -896,20 +938,22 @@ void EvaluateLifecycle(SwingAB &s, MqlRates &rates[], int rates_total, double av
       // و نه حد حداکثر اصلاح دیگر بررسی می‌شود.
       if(s.state == AB_WAIT_RETRACE || s.state == AB_RETRACED)
       {
-         // بروزرسانی عمیق ترین نقطه اصلاح (C)
-         double ext = s.isBull ? rates[m].low : rates[m].high;
-         bool deeper = s.isBull ? (ext < deepest) : (ext > deepest);
+         // عمق اصلاح با بادی سنجیده می‌شود نه با سایه — هم برای حداقل 20 درصد
+         // و هم برای حداکثر. C روی عمیق ترین بدنه می‌نشیند تا با همین معیار
+         // سازگار باشد و CD هم از روی همان حساب شود.
+         double bodyExt = s.isBull ? MathMin(rates[m].open, rates[m].close)
+                                   : MathMax(rates[m].open, rates[m].close);
+
+         bool deeper = s.isBull ? (bodyExt < deepest) : (bodyExt > deepest);
          if(deeper)
          {
-            deepest  = ext;
+            deepest  = bodyExt;
             s.idxC   = m;
             s.timeC  = rates[m].time;
-            s.priceC = ext;
+            s.priceC = bodyExt;
          }
 
          // باطل: بادی از حداکثر درصد مجاز اصلاح رد شود (سایه ایراد ندارد)
-         double bodyExt = s.isBull ? MathMin(rates[m].open, rates[m].close)
-                                   : MathMax(rates[m].open, rates[m].close);
          bool bodyBeyondMax = s.isBull ? (bodyExt < levelMax) : (bodyExt > levelMax);
          if(bodyBeyondMax)
          {
@@ -920,7 +964,11 @@ void EvaluateLifecycle(SwingAB &s, MqlRates &rates[], int rates_total, double av
          if(s.state == AB_WAIT_RETRACE)
          {
             bool retraceDeepEnough = s.isBull ? (deepest <= levelMin) : (deepest >= levelMin);
-            bool enoughCandles     = ((m - s.idxB) >= MinRetraceCandles);
+
+            // «حداقل 3 کندل اصلاح» یعنی خود نقطه C حداقل 3 کندل بعد از B باشد،
+            // نه اینکه فقط 3 کندل از B گذشته باشد. با شرط قبلی یک کندل که
+            // پایین می‌رفت و بعد قیمت برمی‌گشت، به اشتباه اصلاح معتبر حساب می‌شد.
+            bool enoughCandles     = (s.idxC >= 0 && (s.idxC - s.idxB) >= MinRetraceCandles);
 
             // باطل: قیمت سطح B را بشکند بدون اینکه اصلاح کافی رخ داده باشد
             bool touchedB = s.isBull ? (rates[m].high > s.priceB) : (rates[m].low < s.priceB);
@@ -1253,7 +1301,7 @@ void ProcessIndicator()
    // و هنوز معتبر است از پنجره اسکن بیرون نیفتد.
    int needed;
    if(lifecycle) needed = ABCDHistoryBars;
-   else          needed = maxLookback + MaxCandles + SwingLookAhead + 10;
+   else          needed = maxLookback + MaxCandles + 10;
 
    int available = Bars(_Symbol, _Period);
    if(available <= 0) return;
