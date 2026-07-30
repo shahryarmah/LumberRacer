@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
-//|                                              ShinMim V1.08.mq5   |
+//|                                              ShinMim V1.09.mq5   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "1.08"
+#property version   "1.09"
 #property indicator_chart_window
 
 // این اندیکاتور فقط با آبجکت‌های گرافیکی کار می‌کند و هیچ بافری ندارد،
@@ -51,9 +51,10 @@ input int    SwingLookAhead       = 3;     // جستجوی B تا چند کند�
 input bool   EnableABCD           = true;  // ردیابی چرخه عمر و اعتبارسنجی الگو
 input int    ABCDHistoryBars      = 300;   // تعداد کندل تاریخچه برای ردیابی الگو
 input double RetraceMinPercent    = 20.0;  // حداقل درصد اصلاح از AB
-input double RetraceMaxPercent    = 50.0;  // حداکثر درصد اصلاح (با بادی)
+input double RetraceMaxPercent    = 60.0;  // حداکثر درصد اصلاح (با بادی)
 input int    MinRetraceCandles    = 3;     // حداقل کندل اصلاح، از کندل بعد از B
-input bool   Show20PercentLine    = true;  // رسم خط 20 درصد
+input bool   Show20PercentLine    = true;  // رسم خط حداقل اصلاح (20 درصد)
+input bool   ShowMaxRetraceLine   = true;  // رسم خط حداکثر اصلاح (60 درصد)
 input bool   ShowStateLabel       = true;  // نمایش وضعیت الگو کنار خط B
 input bool   ExtendBLineToNow     = true;  // ادامه خط B تا کندل جاری تا وقتی الگو فعال است
 
@@ -163,10 +164,12 @@ color GetCategoryColor(TFCategory cat)
 }
 
 // آیا این دسته چرخه عمر ABCD را دنبال می‌کند؟
-// تایم ورود فقط آخرین AB را نگه می‌دارد و وارد چرخه عمر نمی‌شود.
+// هر سه دسته دنبال می‌کنند، چون کار به صورت فراکتالی است و تشخیص کندل شکست و
+// سیگنال ورود دقیقا در تایم پایین لازم است. تفاوت تایم ورود در این است که
+// فقط آخرین AB را نگه می‌دارد (در ProcessIndicator اعمال می‌شود).
 bool UsesLifecycle(TFCategory cat)
 {
-   return (EnableABCD && (cat == STRUCTURE || cat == TRIGGER));
+   return EnableABCD;
 }
 
 // پیشوند نام آبجکت ها: <cat>_<tf>_
@@ -828,9 +831,9 @@ void EvaluateLifecycle(SwingAB &s, MqlRates &rates[], int rates_total, double av
    s.state = AB_WAIT_RETRACE;
 
    // سطوح اصلاح نسبت به B، در جهت مخالف حرکت AB
-   double dir     = s.isBull ? -1.0 : 1.0;   // اصلاح AB صعودی، نزولی است
-   double level20 = s.priceB + dir * s.size * RetraceMinPercent / 100.0;
-   double level50 = s.priceB + dir * s.size * RetraceMaxPercent / 100.0;
+   double dir      = s.isBull ? -1.0 : 1.0;   // اصلاح AB صعودی، نزولی است
+   double levelMin = s.priceB + dir * s.size * RetraceMinPercent / 100.0;
+   double levelMax = s.priceB + dir * s.size * RetraceMaxPercent / 100.0;
 
    double deepest = s.priceB;   // عمیق ترین نقطه اصلاح تا این لحظه
 
@@ -838,7 +841,10 @@ void EvaluateLifecycle(SwingAB &s, MqlRates &rates[], int rates_total, double av
    // اگر آن را حساب کنیم وضعیت الگو وسط کندل بالا و پایین می‌رود (repaint).
    for(int m = s.idxB + 1; m <= rates_total - 2; m++)
    {
-      if(s.state == AB_WAIT_RETRACE)
+      // ردیابی اصلاح تا لحظه شکست B ادامه دارد، نه فقط تا وقتی معتبر شود.
+      // وگرنه اگر قیمت بعد از معتبر شدن اصلاح عمیق تر برود، نه C بروز می‌شود
+      // و نه حد حداکثر اصلاح دیگر بررسی می‌شود.
+      if(s.state == AB_WAIT_RETRACE || s.state == AB_RETRACED)
       {
          // بروزرسانی عمیق ترین نقطه اصلاح (C)
          double ext = s.isBull ? rates[m].low : rates[m].high;
@@ -851,34 +857,36 @@ void EvaluateLifecycle(SwingAB &s, MqlRates &rates[], int rates_total, double av
             s.priceC = ext;
          }
 
-         // باطل: بادی از سطح 50 درصد رد شود (سایه ایراد ندارد)
+         // باطل: بادی از حداکثر درصد مجاز اصلاح رد شود (سایه ایراد ندارد)
          double bodyExt = s.isBull ? MathMin(rates[m].open, rates[m].close)
                                    : MathMax(rates[m].open, rates[m].close);
-         bool bodyBeyond50 = s.isBull ? (bodyExt < level50) : (bodyExt > level50);
-         if(bodyBeyond50)
+         bool bodyBeyondMax = s.isBull ? (bodyExt < levelMax) : (bodyExt > levelMax);
+         if(bodyBeyondMax)
          {
             s.state = AB_INVALID;
             return;
          }
 
-         bool retraceDeepEnough = s.isBull ? (deepest <= level20) : (deepest >= level20);
-         bool enoughCandles     = ((m - s.idxB) >= MinRetraceCandles);
-
-         // باطل: قیمت سطح B را بشکند بدون اینکه اصلاح کافی رخ داده باشد
-         bool touchedB = s.isBull ? (rates[m].high > s.priceB) : (rates[m].low < s.priceB);
-         if(touchedB && !(retraceDeepEnough && enoughCandles))
+         if(s.state == AB_WAIT_RETRACE)
          {
-            s.state = AB_INVALID;
-            return;
+            bool retraceDeepEnough = s.isBull ? (deepest <= levelMin) : (deepest >= levelMin);
+            bool enoughCandles     = ((m - s.idxB) >= MinRetraceCandles);
+
+            // باطل: قیمت سطح B را بشکند بدون اینکه اصلاح کافی رخ داده باشد
+            bool touchedB = s.isBull ? (rates[m].high > s.priceB) : (rates[m].low < s.priceB);
+            if(touchedB && !(retraceDeepEnough && enoughCandles))
+            {
+               s.state = AB_INVALID;
+               return;
+            }
+
+            // بدون continue، اگر اصلاح در همین کندل معتبر شد، شکست هم در همین
+            // کندل بررسی می‌شود و یک کندل عقب نمی‌افتیم
+            if(retraceDeepEnough && enoughCandles)
+               s.state = AB_RETRACED;
+            else
+               continue;
          }
-
-         if(retraceDeepEnough && enoughCandles)
-            s.state = AB_RETRACED;
-         else
-            continue;
-
-         // بدون continue، اگر اصلاح در همین کندل معتبر شد، شکست هم در همین
-         // کندل بررسی می‌شود و یک کندل عقب نمی‌افتیم
       }
 
       if(s.state == AB_RETRACED)
@@ -1064,19 +1072,33 @@ void DrawSwing(SwingAB &s, TFCategory cat, ENUM_TIMEFRAMES tf, color drawColor, 
 
    if(!UsesLifecycle(cat)) return;
 
-   // --- سطح 20 درصد اصلاح
+   // --- مرزهای ناحیه اصلاح مجاز: حداقل و حداکثر درصد
+   double dir = s.isBull ? -1.0 : 1.0;
+
    if(Show20PercentLine)
    {
-      double dir      = s.isBull ? -1.0 : 1.0;
-      double level20  = s.priceB + dir * s.size * RetraceMinPercent / 100.0;
-      string line20   = base + "_L20";
+      double levelMin = s.priceB + dir * s.size * RetraceMinPercent / 100.0;
+      string lineMin  = base + "_L20";
 
-      if(ObjectFind(0, line20) >= 0) ObjectDelete(0, line20);
-      ObjectCreate(0, line20, OBJ_TREND, 0, s.timeB, level20, s.timeB + tfSecs * LineMidLength, level20);
-      ObjectSetInteger(0, line20, OBJPROP_COLOR, drawColor);
-      ObjectSetInteger(0, line20, OBJPROP_STYLE, STYLE_DOT);
-      ObjectSetInteger(0, line20, OBJPROP_WIDTH, 1);
-      ObjectSetInteger(0, line20, OBJPROP_RAY_RIGHT, false);
+      if(ObjectFind(0, lineMin) >= 0) ObjectDelete(0, lineMin);
+      ObjectCreate(0, lineMin, OBJ_TREND, 0, s.timeB, levelMin, s.timeB + tfSecs * LineMidLength, levelMin);
+      ObjectSetInteger(0, lineMin, OBJPROP_COLOR, drawColor);
+      ObjectSetInteger(0, lineMin, OBJPROP_STYLE, STYLE_DOT);
+      ObjectSetInteger(0, lineMin, OBJPROP_WIDTH, 1);
+      ObjectSetInteger(0, lineMin, OBJPROP_RAY_RIGHT, false);
+   }
+
+   if(ShowMaxRetraceLine)
+   {
+      double levelMax = s.priceB + dir * s.size * RetraceMaxPercent / 100.0;
+      string lineMax  = base + "_LMX";
+
+      if(ObjectFind(0, lineMax) >= 0) ObjectDelete(0, lineMax);
+      ObjectCreate(0, lineMax, OBJ_TREND, 0, s.timeB, levelMax, s.timeB + tfSecs * LineMidLength, levelMax);
+      ObjectSetInteger(0, lineMax, OBJPROP_COLOR, drawColor);
+      ObjectSetInteger(0, lineMax, OBJPROP_STYLE, STYLE_DOT);
+      ObjectSetInteger(0, lineMax, OBJPROP_WIDTH, 1);
+      ObjectSetInteger(0, lineMax, OBJPROP_RAY_RIGHT, false);
    }
 
    // --- لیبل C
@@ -1164,11 +1186,6 @@ void ProcessIndicator()
 
    datetime curBar = iTime(_Symbol, _Period, 0);
    if(curBar == 0) return;
-
-   // با چرخه عمر، محاسبه فقط با بسته شدن کندل انجام می‌شود: هم چون وضعیت الگو
-   // فقط روی کندل بسته شده معنی دارد، هم چون اسکن تاریخچه بلند روی هر تیک سنگین است.
-   bool newBarOrForced = (forceRedraw || curBar != lastBarTime);
-   if(lifecycle && !newBarOrForced) return;
 
    // با چرخه عمر، تاریخچه بلندتری لازم است تا الگویی که مدت‌ها پیش شکل گرفته
    // و هنوز معتبر است از پنجره اسکن بیرون نیفتد.
