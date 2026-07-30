@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
-//|                                              ShinMim V1.07.mq5   |
+//|                                              ShinMim V1.08.mq5   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "1.07"
+#property version   "1.08"
 #property indicator_chart_window
 
 // این اندیکاتور فقط با آبجکت‌های گرافیکی کار می‌کند و هیچ بافری ندارد،
@@ -27,8 +27,8 @@ input color  EntryColor     = clrViolet;       // رنگ ورود
 input color  LabelColor     = clrBlack;        // رنگ لیبل ها
 
 //---- تنظیمات اصلی
-input int    MaxLookbackStructure = 7;    // تعداد کندل برای ساختار
-input int    MaxLookbackTrigger   = 15;   // تعداد کندل برای تریگر
+input int    MaxLookbackStructure = 7;    // تعداد کندل برای ساختار (وقتی ABCD خاموش است)
+input int    MaxLookbackTrigger   = 15;   // تعداد کندل برای تریگر (وقتی ABCD خاموش است)
 input int    MaxLookbackEntry     = 30;   // تعداد کندل برای ورود
 input int    MinCandles           = 3;
 input int    MaxCandles           = 10;
@@ -44,24 +44,80 @@ input bool   ShowFVG              = true;
 input int    LabelShiftCandles    = 1;    // تعداد کندل شیفت لیبل ها
 
 //---- تنظیمات نمایش AB
-input bool   ShowPreviousABs      = false; // نمایش AB های قبلی در محدوده چک
+input bool   ShowPreviousABs      = false; // نمایش AB های قبلی (وقتی ABCD خاموش است)
 input int    SwingLookAhead       = 3;     // جستجوی B تا چند کندل بعد از پنجره
+
+//---- چرخه عمر الگو ABCD
+input bool   EnableABCD           = true;  // ردیابی چرخه عمر و اعتبارسنجی الگو
+input int    ABCDHistoryBars      = 300;   // تعداد کندل تاریخچه برای ردیابی الگو
+input double RetraceMinPercent    = 20.0;  // حداقل درصد اصلاح از AB
+input double RetraceMaxPercent    = 50.0;  // حداکثر درصد اصلاح (با بادی)
+input int    MinRetraceCandles    = 3;     // حداقل کندل اصلاح، از کندل بعد از B
+input bool   Show20PercentLine    = true;  // رسم خط 20 درصد
+input bool   ShowStateLabel       = true;  // نمایش وضعیت الگو کنار خط B
+input bool   ExtendBLineToNow     = true;  // ادامه خط B تا کندل جاری تا وقتی الگو فعال است
+
+//---- کندل شکست
+input double BreakMinBodyPercent  = 90.0;  // حداقل درصد بادی کندل شکست
+input double BreakMaxWickPercent  = 5.0;   // حداکثر درصد سایه هر طرف
+input double BreakMinSizeRatio    = 1.0;   // حداقل اندازه کندل شکست نسبت به میانگین رنج
+input double BreakMinDistancePct  = 10.0;  // حداقل فاصله اوپن و کلوز از سطح B (درصد از AB)
+input int    BreakMaxCandles      = 3;     // ترکیب حداکثر چند کندل به عنوان یک کندل شکست
+
+//---- سیگنال و هشدار
+input bool   ShowEntrySignal      = true;  // نمایش فلش سیگنال ورود
+input bool   EnableAlerts         = false; // هشدار در لحظات کلیدی
 
 //+------------------------------------------------------------------+
 enum TFCategory { STRUCTURE, TRIGGER, ENTRY, NONE };
 
-// یک سویینگ AB تشخیص داده شده
+// وضعیت الگو در چرخه عمر
+enum ABState
+{
+   AB_FORMING,        // هنوز در حال تشکیل (B روی کندل جاری)
+   AB_WAIT_RETRACE,   // AB قطعی شد، منتظر اصلاح معتبر
+   AB_RETRACED,       // اصلاح معتبر ثبت شد (C)، منتظر شکست B
+   AB_BROKEN,         // B شکسته شد، نقدینگی هانت شد
+   AB_DONE,           // قیمت به A رسید، کار الگو تمام
+   AB_INVALID         // باطل
+};
+
+// یک سویینگ AB به همراه وضعیت چرخه عمر
 struct SwingAB
 {
-   int      idxA;      // ایندکس کندل A در آرایه rates
-   int      idxB;      // ایندکس کندل B
-   datetime timeA;     // زمان کندل A — شناسه پایدار برای نام آبجکت
+   int      idxA;
+   int      idxB;
+   datetime timeA;
    datetime timeB;
    double   priceA;
    double   priceB;
-   bool     isBull;    // جهت سویینگ
-   double   size;      // طول AB = |priceB - priceA|
-   bool     live;      // آیا B همان کندل جاری (بسته نشده) است
+   bool     isBull;
+   double   size;       // |priceB - priceA|
+   bool     live;       // B روی کندل جاری بسته نشده است
+
+   ABState  state;
+
+   int      idxC;       // عمیق ترین نقطه اصلاح
+   datetime timeC;
+   double   priceC;
+
+   int      idxBreakFrom;  // اولین کندل شکست (برای کندل مرکب)
+   int      idxBreakTo;    // آخرین کندل شکست
+   datetime timeBreak;
+   double   breakHigh;
+   double   breakLow;
+
+   double   priceD;     // بیشترین نفوذ بعد از شکست
+
+   int      idxSignal;  // کندلی که سیگنال ورود داد
+   datetime timeSignal;
+   double   priceSignal;
+};
+
+// کندل مرکب از چند کندل متوالی
+struct Composite
+{
+   double open, high, low, close;
 };
 
 // لیست تایم فریم های برای هر دکمه
@@ -84,9 +140,9 @@ bool isTriggerListOpen   = false;
 bool isEntryListOpen     = false;
 
 // کنترل بازترسیم
-datetime lastBarTime       = 0;    // زمان کندلی که آخرین بار کامل رسم شد
-bool     forceRedraw       = true; // تغییر تنظیمات → رسم کامل بدون انتظار
-string   lastConfirmedSig  = "";   // امضای مجموعه AB های قطعی شده
+datetime lastBarTime       = 0;
+bool     forceRedraw       = true;
+string   lastConfirmedSig  = "";
 
 //+------------------------------------------------------------------+
 TFCategory GetCategory()
@@ -106,8 +162,14 @@ color GetCategoryColor(TFCategory cat)
    return clrGray;
 }
 
+// آیا این دسته چرخه عمر ABCD را دنبال می‌کند؟
+// تایم ورود فقط آخرین AB را نگه می‌دارد و وارد چرخه عمر نمی‌شود.
+bool UsesLifecycle(TFCategory cat)
+{
+   return (EnableABCD && (cat == STRUCTURE || cat == TRIGGER));
+}
+
 // پیشوند نام آبجکت ها: <cat>_<tf>_
-// تایم فریم بلافاصله بعد از نوع می‌آید تا حذف بر اساس تایم فریم دقیق باشد
 string GetTFPrefix(TFCategory cat, ENUM_TIMEFRAMES tf)
 {
    string catStr = (cat == STRUCTURE) ? "st_" : (cat == TRIGGER) ? "tr_" : (cat == ENTRY) ? "en_" : "xx_";
@@ -115,7 +177,7 @@ string GetTFPrefix(TFCategory cat, ENUM_TIMEFRAMES tf)
 }
 
 // نام پایه یک سویینگ.
-// سویینگ زنده نام ثابت "L" می‌گیرد تا هر بار جایگزین قبلی شود و بادبزن خط‌چین نسازد.
+// سویینگ زنده نام ثابت "L" می‌گیرد تا هر بار جایگزین قبلی شود.
 // سویینگ قطعی شده با زمان کندل A نام می‌گیرد؛ زمان برخلاف ایندکس آرایه پایدار است.
 string SwingBaseName(TFCategory cat, ENUM_TIMEFRAMES tf, SwingAB &s)
 {
@@ -139,15 +201,13 @@ void DeleteObjectsOfTF(TFCategory cat, ENUM_TIMEFRAMES tf)
    DeleteByPrefix(GetTFPrefix(cat, tf));
 }
 
-// فقط آبجکت های سویینگ زنده
 void DeleteLiveObjectsOfTF(TFCategory cat, ENUM_TIMEFRAMES tf)
 {
    DeleteByPrefix(GetTFPrefix(cat, tf) + "L_");
 }
 
 // پاکسازی آبجکت های نسخه های قدیمی تر.
-// نام گذاری قبل از 1.06 شامل "_TF" بود و نام گذاری فعلی هرگز "_TF" تولید نمی‌کند،
-// پس این فیلتر فقط باقیمانده های قدیمی را می‌گیرد.
+// نام گذاری قبل از 1.06 شامل "_TF" بود و نام گذاری فعلی هرگز "_TF" تولید نمی‌کند.
 // نکته مهم: اینجا نباید همه آبجکت ها پاک شوند. متاتریدر با هر تغییر تایم فریم
 // چارت دوباره OnInit را صدا می‌زند و پاکسازی کامل، آبجکت های تایم فریم بالاتر را
 // که باید روی تایم فریم پایین تر باقی بمانند از بین می‌برد.
@@ -194,23 +254,10 @@ void HighlightSelectedTF(TFCategory cat, int selectedIdx)
    string prefix;
    int count = 0;
 
-   if(cat == STRUCTURE)
-   {
-      prefix = "ListSt_";
-      count = ArraySize(StructureTFList);
-   }
-   else if(cat == TRIGGER)
-   {
-      prefix = "ListTr_";
-      count = ArraySize(TriggerTFList);
-   }
-   else if(cat == ENTRY)
-   {
-      prefix = "ListEn_";
-      count = ArraySize(EntryTFList);
-   }
-   else
-      return;   // دسته نامعتبر
+   if(cat == STRUCTURE)   { prefix = "ListSt_"; count = ArraySize(StructureTFList); }
+   else if(cat == TRIGGER){ prefix = "ListTr_"; count = ArraySize(TriggerTFList);   }
+   else if(cat == ENTRY)  { prefix = "ListEn_"; count = ArraySize(EntryTFList);     }
+   else return;
 
    for(int i = 0; i < count; i++)
    {
@@ -303,8 +350,6 @@ void SaveState()
    ObjectSetString(0, stateObjName, OBJPROP_TEXT, txt);
 }
 
-// محدود کردن اندیس خوانده شده از وضعیت ذخیره شده تا از خطای
-// «array out of range» جلوگیری شود (مثلا اگر طول لیست ها عوض شده باشد)
 int ClampIdx(int idx, int size)
 {
    if(idx < 0) return 0;
@@ -313,13 +358,11 @@ int ClampIdx(int idx, int size)
 }
 
 //+------------------------------------------------------------------+
-// ساخت / بروزرسانی دکمه اصلی
 void CreateTFButton(string name, int x, int y, string text)
 {
    if(ObjectFind(0, name) < 0)
       ObjectCreate(0, name, OBJ_BUTTON, 0, 0, 0);
 
-   // مقادیر همیشه ست می‌شوند تا اگر دکمه از قبل مانده باشد، متن آن قدیمی نماند
    ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
    ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
    ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
@@ -342,7 +385,6 @@ int OnInit()
    string chartIDStr = IntegerToString(ChartID());
    stateObjName = "ShinMim_State_" + chartIDStr;
 
-   // اگر وضعیت قبلا ذخیره شده بود بارگذاری شود
    if(ObjectFind(0, stateObjName) >= 0)
    {
       string txt = ObjectGetString(0, stateObjName, OBJPROP_TEXT);
@@ -352,23 +394,18 @@ int OnInit()
          int p2end = (p1end >= 0) ? StringFind(txt, "|", p1end + 1) : -1;
          if(p1end >= 0 && p2end > p1end)
          {
-            string part1 = StringSubstr(txt, 0, p1end);
-            string part2 = StringSubstr(txt, p1end + 1, p2end - (p1end + 1));
-            string part3 = StringSubstr(txt, p2end + 1);
-            idxStructure = (int)StringToInteger(part1);
-            idxTrigger   = (int)StringToInteger(part2);
-            idxEntry     = (int)StringToInteger(part3);
+            idxStructure = (int)StringToInteger(StringSubstr(txt, 0, p1end));
+            idxTrigger   = (int)StringToInteger(StringSubstr(txt, p1end + 1, p2end - (p1end + 1)));
+            idxEntry     = (int)StringToInteger(StringSubstr(txt, p2end + 1));
          }
       }
    }
 
-   // اندیس ها همیشه محدود می‌شوند، چه از وضعیت خوانده شده باشند چه پیش فرض
    idxStructure = ClampIdx(idxStructure, ArraySize(StructureTFList));
    idxTrigger   = ClampIdx(idxTrigger,   ArraySize(TriggerTFList));
    idxEntry     = ClampIdx(idxEntry,     ArraySize(EntryTFList));
    SaveState();
 
-   // مقداردهی تایم فریم ها از روی اندیس ها
    StructureTF = StructureTFList[idxStructure];
    TriggerTF   = TriggerTFList[idxTrigger];
    EntryTF     = EntryTFList[idxEntry];
@@ -380,7 +417,6 @@ int OnInit()
    // فقط باقیمانده نسخه های قدیمی تر پاک می‌شود، نه همه آبجکت ها
    DeleteLegacyObjects();
 
-   // ساخت دکمه ها با نام یکتا
    CreateTFButton("BtnStructure_" + chartIDStr, 10, 10, "STRUCT: " + TFToStr(StructureTF));
    CreateTFButton("BtnTrigger_"   + chartIDStr, 10, 40, "TRIG: "   + TFToStr(TriggerTF));
    CreateTFButton("BtnEntry_"     + chartIDStr, 10, 70, "ENTRY: "  + TFToStr(EntryTF));
@@ -389,8 +425,7 @@ int OnInit()
    forceRedraw      = true;
    lastConfirmedSig = "";
 
-   // === تنظیم تایمر هر 1 ثانیه ===
-   EventSetTimer(1);   // برای وقتی که بازار تیک ندارد
+   EventSetTimer(1);
 
    ChartRedraw();
    return(INIT_SUCCEEDED);
@@ -478,10 +513,8 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
                           StringFind(sparam, "ListEn_") == 0);
       if(!isOurObject) return;
 
-      // دکمه ها بعد از کلیک در حالت فشرده می‌مانند؛ آزادشان می‌کنیم
       ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
 
-      // ضد لرزش کلیک — فقط روی کلیک آبجکت های خودمان اعمال می‌شود
       ulong now = GetMicrosecondCount();
       if(now - lastClickTime < 100000)   // 0.1 ثانیه
       {
@@ -520,24 +553,21 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
       }
       else if(StringFind(sparam, "ListSt_") == 0)
       {
-         int idx = (int)StringToInteger(StringSubstr(sparam, StringLen("ListSt_")));
-         ChangeTF("STRUCT", idx);
+         ChangeTF("STRUCT", (int)StringToInteger(StringSubstr(sparam, StringLen("ListSt_"))));
          HideTFList(STRUCTURE);
          isStructureListOpen = false;
          currentListCategory = NONE;
       }
       else if(StringFind(sparam, "ListTr_") == 0)
       {
-         int idx = (int)StringToInteger(StringSubstr(sparam, StringLen("ListTr_")));
-         ChangeTF("TRIG", idx);
+         ChangeTF("TRIG", (int)StringToInteger(StringSubstr(sparam, StringLen("ListTr_"))));
          HideTFList(TRIGGER);
          isTriggerListOpen = false;
          currentListCategory = NONE;
       }
       else if(StringFind(sparam, "ListEn_") == 0)
       {
-         int idx = (int)StringToInteger(StringSubstr(sparam, StringLen("ListEn_")));
-         ChangeTF("ENTRY", idx);
+         ChangeTF("ENTRY", (int)StringToInteger(StringSubstr(sparam, StringLen("ListEn_"))));
          HideTFList(ENTRY);
          isEntryListOpen = false;
          currentListCategory = NONE;
@@ -585,8 +615,7 @@ void DeleteLowerTFObjects()
 
          int objTF = (int)StringToInteger(StringSubstr(name, p1 + 1, p2 - p1 - 1));
 
-         // مقادیر ENUM_TIMEFRAMES با مدت زمان کندل هم‌ترتیب هستند،
-         // بنابراین مقایسه عددی مستقیم برای تشخیص تایم فریم پایین تر کافی است
+         // مقادیر ENUM_TIMEFRAMES با مدت زمان کندل هم‌ترتیب هستند
          if(objTF < currentTF)
             ObjectDelete(0, name);
       }
@@ -594,14 +623,13 @@ void DeleteLowerTFObjects()
 }
 
 //+------------------------------------------------------------------+
-// جمع آوری سویینگ ها بدون رسم.
-// خروجی به ترتیب زمانی (قدیمی → جدید) برگردانده می‌شود.
-int CollectSwings(MqlRates &rates[], int rates_total, int maxLookback, SwingAB &out[])
+// جمع آوری سویینگ ها بدون رسم. خروجی به ترتیب زمانی (قدیمی → جدید).
+int CollectSwings(MqlRates &rates[], int rates_total, int scanFrom, SwingAB &out[])
 {
    ArrayResize(out, rates_total);
    int cnt = 0;
 
-   int start = (int)MathMax(MinCandles, rates_total - maxLookback - MaxCandles);
+   int start = (int)MathMax(MinCandles, scanFrom);
    int i = rates_total - 1;
 
    // کوچکترین idxA پذیرفته شده تا این لحظه. چون از جدید به قدیم می‌رویم،
@@ -626,7 +654,6 @@ int CollectSwings(MqlRates &rates[], int rates_total, int maxLookback, SwingAB &
             double bodyPercent = (candleSize == 0) ? 0 : (body / candleSize) * 100.0;
 
             if(bodyPercent < MinBodyPercent) nonStd++;
-
             if(rates[idx].close > rates[idx].open) bullCount++;
             if(rates[idx].close < rates[idx].open) bearCount++;
          }
@@ -674,11 +701,9 @@ int CollectSwings(MqlRates &rates[], int rates_total, int maxLookback, SwingAB &
          if(idxA == idxB) continue;
          if(idxB - idxA + 1 < MinCandles) continue;
 
-         // --- جلوگیری از AB تو در تو: محدوده [idxA, idxB] نباید با سویینگ
-         //     پذیرفته شده قبلی همپوشانی داشته باشد
+         // جلوگیری از AB تو در تو
          if(idxB >= lastAcceptedA) continue;
 
-         // --- فیلتر طول AB نسبت به میانگین رنج کندل ها
          double totalRange = 0.0;
          for(int k = startIdx; k <= endIdx; k++)
             totalRange += (rates[k].high - rates[k].low);
@@ -689,15 +714,28 @@ int CollectSwings(MqlRates &rates[], int rates_total, int maxLookback, SwingAB &
          if(abLength < MinABRatio * avgRange || abLength > MaxABRatio * avgRange)
             continue;
 
-         out[cnt].idxA   = idxA;
-         out[cnt].idxB   = idxB;
-         out[cnt].timeA  = rates[idxA].time;
-         out[cnt].timeB  = rates[idxB].time;
-         out[cnt].priceA = priceA;
-         out[cnt].priceB = priceB;
-         out[cnt].isBull = isBullish;
-         out[cnt].size   = abLength;
-         out[cnt].live   = (idxB == rates_total - 1);
+         out[cnt].idxA         = idxA;
+         out[cnt].idxB         = idxB;
+         out[cnt].timeA        = rates[idxA].time;
+         out[cnt].timeB        = rates[idxB].time;
+         out[cnt].priceA       = priceA;
+         out[cnt].priceB       = priceB;
+         out[cnt].isBull       = isBullish;
+         out[cnt].size         = abLength;
+         out[cnt].live         = (idxB == rates_total - 1);
+         out[cnt].state        = AB_FORMING;
+         out[cnt].idxC         = -1;
+         out[cnt].timeC        = 0;
+         out[cnt].priceC       = 0.0;
+         out[cnt].idxBreakFrom = -1;
+         out[cnt].idxBreakTo   = -1;
+         out[cnt].timeBreak    = 0;
+         out[cnt].breakHigh    = 0.0;
+         out[cnt].breakLow     = 0.0;
+         out[cnt].priceD       = 0.0;
+         out[cnt].idxSignal    = -1;
+         out[cnt].timeSignal   = 0;
+         out[cnt].priceSignal  = 0.0;
          cnt++;
 
          lastAcceptedA = idxA;
@@ -723,11 +761,192 @@ int CollectSwings(MqlRates &rates[], int rates_total, int maxLookback, SwingAB &
 }
 
 //+------------------------------------------------------------------+
-// کاهش زنجیره AB ها:
-//   خلاف جهت                 → هر دو می‌مانند
-//   هم جهت + جدید بزرگتر     → قبلی حذف می‌شود
-//   هم جهت + جدید کوچکتر     → هر دو می‌مانند
-// حلقه while لازم است تا اگر AB جدید از چند AB قبلی بزرگتر بود، همه جمع شوند.
+// ساخت کندل مرکب از چند کندل متوالی
+void BuildComposite(MqlRates &rates[], int from, int to, Composite &c)
+{
+   c.open  = rates[from].open;
+   c.close = rates[to].close;
+   c.high  = rates[from].high;
+   c.low   = rates[from].low;
+
+   for(int m = from; m <= to; m++)
+   {
+      if(rates[m].high > c.high) c.high = rates[m].high;
+      if(rates[m].low  < c.low)  c.low  = rates[m].low;
+   }
+}
+
+// کندل شکست معتبر:
+//   بادی حداقل BreakMinBodyPercent درصد کل کندل
+//   هیچ طرف سایه بیش از BreakMaxWickPercent درصد نداشته باشد
+//   کندل خیلی کوچک نباشد (نسبت به میانگین رنج)
+//   اوپن و کلوز هر دو به اندازه کافی از سطح B فاصله داشته باشند
+bool IsValidBreak(Composite &c, bool isBull, double bLevel, double abSize, double avgRange)
+{
+   double range = c.high - c.low;
+   if(range <= 0.0) return false;
+
+   double body = MathAbs(c.close - c.open);
+   if(body / range * 100.0 < BreakMinBodyPercent) return false;
+
+   double upperWick = c.high - MathMax(c.open, c.close);
+   double lowerWick = MathMin(c.open, c.close) - c.low;
+   if(upperWick / range * 100.0 > BreakMaxWickPercent) return false;
+   if(lowerWick / range * 100.0 > BreakMaxWickPercent) return false;
+
+   // کندل نباید خیلی کوچک باشد
+   if(avgRange > 0.0 && range < BreakMinSizeRatio * avgRange) return false;
+
+   // اوپن و کلوز نباید نزدیک سطح B باشند
+   double minDist = abSize * BreakMinDistancePct / 100.0;
+
+   if(isBull)
+   {
+      if(c.close < bLevel + minDist) return false;   // کلوز باید کافی بالاتر از B باشد
+      if(c.open  > bLevel - minDist) return false;   // اوپن باید کافی پایین تر از B باشد
+   }
+   else
+   {
+      if(c.close > bLevel - minDist) return false;
+      if(c.open  < bLevel + minDist) return false;
+   }
+
+   return true;
+}
+
+//+------------------------------------------------------------------+
+// بازپخش چرخه عمر یک AB از کندل بعد از B تا کندل جاری.
+// وضعیت کاملا از روی قیمت بازسازی می‌شود، پس نیازی به ذخیره سازی حالت نیست.
+void EvaluateLifecycle(SwingAB &s, MqlRates &rates[], int rates_total, double avgRange)
+{
+   if(s.live)
+   {
+      s.state = AB_FORMING;
+      return;
+   }
+
+   s.state = AB_WAIT_RETRACE;
+
+   // سطوح اصلاح نسبت به B، در جهت مخالف حرکت AB
+   double dir     = s.isBull ? -1.0 : 1.0;   // اصلاح AB صعودی، نزولی است
+   double level20 = s.priceB + dir * s.size * RetraceMinPercent / 100.0;
+   double level50 = s.priceB + dir * s.size * RetraceMaxPercent / 100.0;
+
+   double deepest = s.priceB;   // عمیق ترین نقطه اصلاح تا این لحظه
+
+   // فقط کندل های بسته شده بررسی می‌شوند. کندل جاری هنوز می‌تواند تغییر کند و
+   // اگر آن را حساب کنیم وضعیت الگو وسط کندل بالا و پایین می‌رود (repaint).
+   for(int m = s.idxB + 1; m <= rates_total - 2; m++)
+   {
+      if(s.state == AB_WAIT_RETRACE)
+      {
+         // بروزرسانی عمیق ترین نقطه اصلاح (C)
+         double ext = s.isBull ? rates[m].low : rates[m].high;
+         bool deeper = s.isBull ? (ext < deepest) : (ext > deepest);
+         if(deeper)
+         {
+            deepest  = ext;
+            s.idxC   = m;
+            s.timeC  = rates[m].time;
+            s.priceC = ext;
+         }
+
+         // باطل: بادی از سطح 50 درصد رد شود (سایه ایراد ندارد)
+         double bodyExt = s.isBull ? MathMin(rates[m].open, rates[m].close)
+                                   : MathMax(rates[m].open, rates[m].close);
+         bool bodyBeyond50 = s.isBull ? (bodyExt < level50) : (bodyExt > level50);
+         if(bodyBeyond50)
+         {
+            s.state = AB_INVALID;
+            return;
+         }
+
+         bool retraceDeepEnough = s.isBull ? (deepest <= level20) : (deepest >= level20);
+         bool enoughCandles     = ((m - s.idxB) >= MinRetraceCandles);
+
+         // باطل: قیمت سطح B را بشکند بدون اینکه اصلاح کافی رخ داده باشد
+         bool touchedB = s.isBull ? (rates[m].high > s.priceB) : (rates[m].low < s.priceB);
+         if(touchedB && !(retraceDeepEnough && enoughCandles))
+         {
+            s.state = AB_INVALID;
+            return;
+         }
+
+         if(retraceDeepEnough && enoughCandles)
+            s.state = AB_RETRACED;
+         else
+            continue;
+
+         // بدون continue، اگر اصلاح در همین کندل معتبر شد، شکست هم در همین
+         // کندل بررسی می‌شود و یک کندل عقب نمی‌افتیم
+      }
+
+      if(s.state == AB_RETRACED)
+      {
+         // دنبال کندل شکست معتبر (تکی یا مرکب از 2 تا BreakMaxCandles کندل)
+         for(int n = 1; n <= BreakMaxCandles; n++)
+         {
+            int from = m - n + 1;
+            if(from <= s.idxC) break;   // کندل مرکب نباید از C عقب تر برود
+
+            Composite c;
+            BuildComposite(rates, from, m, c);
+
+            if(IsValidBreak(c, s.isBull, s.priceB, s.size, avgRange))
+            {
+               s.state        = AB_BROKEN;
+               s.idxBreakFrom = from;
+               s.idxBreakTo   = m;
+               s.timeBreak    = rates[m].time;
+               s.breakHigh    = c.high;
+               s.breakLow     = c.low;
+               s.priceD       = s.isBull ? c.high : c.low;
+               break;
+            }
+         }
+         continue;
+      }
+
+      if(s.state == AB_BROKEN)
+      {
+         // ردیابی D (بیشترین نفوذ)
+         if(s.isBull) { if(rates[m].high > s.priceD) s.priceD = rates[m].high; }
+         else         { if(rates[m].low  < s.priceD) s.priceD = rates[m].low;  }
+
+         // باطل: CD بزرگتر از AB شود
+         if(MathAbs(s.priceD - s.priceC) > s.size)
+         {
+            s.state = AB_INVALID;
+            return;
+         }
+
+         // سیگنال ورود: کندلی که آن طرف کندل شکست بسته شود
+         if(s.idxSignal < 0)
+         {
+            bool signalled = s.isBull ? (rates[m].close < s.breakLow)
+                                      : (rates[m].close > s.breakHigh);
+            if(signalled)
+            {
+               s.idxSignal   = m;
+               s.timeSignal  = rates[m].time;
+               s.priceSignal = rates[m].close;
+            }
+         }
+
+         // پایان: قیمت به A رسید
+         bool reachedA = s.isBull ? (rates[m].low <= s.priceA) : (rates[m].high >= s.priceA);
+         if(reachedA)
+         {
+            s.state = AB_DONE;
+            return;
+         }
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+// کاهش زنجیره AB ها (فقط وقتی چرخه عمر خاموش است):
+//   خلاف جهت → هر دو؛ هم جهت + جدید بزرگتر → قبلی حذف؛ هم جهت + جدید کوچکتر → هر دو
 int ReduceSwings(SwingAB &src[], int n, SwingAB &dst[])
 {
    ArrayResize(dst, n);
@@ -746,6 +965,21 @@ int ReduceSwings(SwingAB &src[], int n, SwingAB &dst[])
 }
 
 //+------------------------------------------------------------------+
+string StateText(ABState st)
+{
+   switch(st)
+   {
+      case AB_FORMING:      return "...";
+      case AB_WAIT_RETRACE: return "WAIT";
+      case AB_RETRACED:     return "C ok";
+      case AB_BROKEN:       return "HUNT";
+      case AB_DONE:         return "DONE";
+      case AB_INVALID:      return "X";
+   }
+   return "";
+}
+
+//+------------------------------------------------------------------+
 void DrawSwing(SwingAB &s, TFCategory cat, ENUM_TIMEFRAMES tf, color drawColor, int tfSecs,
                MqlRates &rates[], int rates_total)
 {
@@ -757,6 +991,8 @@ void DrawSwing(SwingAB &s, TFCategory cat, ENUM_TIMEFRAMES tf, color drawColor, 
    string extLine  = base + "_BL";
    string midLine  = base + "_MID";
 
+   bool active = (s.state == AB_WAIT_RETRACE || s.state == AB_RETRACED || s.state == AB_BROKEN);
+
    // --- FVG داخل سویینگ بین idxA و idxB
    if(ShowFVG && (cat == STRUCTURE || cat == TRIGGER))
    {
@@ -764,7 +1000,6 @@ void DrawSwing(SwingAB &s, TFCategory cat, ENUM_TIMEFRAMES tf, color drawColor, 
       {
          if(m >= rates_total) break;
 
-         // نام بر مبنای زمان کندل تا بین بازترسیم ها پایدار بماند
          string fvgName = base + "_FVG" + IntegerToString((long)rates[m].time);
          datetime fvgEnd = rates[m].time + tfSecs * FVGExtendCandles;
 
@@ -785,7 +1020,7 @@ void DrawSwing(SwingAB &s, TFCategory cat, ENUM_TIMEFRAMES tf, color drawColor, 
       }
    }
 
-   // --- خط AB: تا وقتی سویینگ در حال تشکیل است خط‌چین، بعد از قطعی شدن ممتد
+   // --- خط AB: در حال تشکیل خط‌چین، بعد از قطعی شدن ممتد
    if(ObjectFind(0, lineName) >= 0) ObjectDelete(0, lineName);
    ObjectCreate(0, lineName, OBJ_TREND, 0, s.timeA, s.priceA, s.timeB, s.priceB);
    ObjectSetInteger(0, lineName, OBJPROP_COLOR, drawColor);
@@ -804,14 +1039,21 @@ void DrawSwing(SwingAB &s, TFCategory cat, ENUM_TIMEFRAMES tf, color drawColor, 
    ObjectSetInteger(0, labelB, OBJPROP_COLOR, LabelColor);
    ObjectSetString(0, labelB, OBJPROP_TEXT, "B");
 
-   // --- خط ادامه از B
+   // --- خط B (محدوده نقدینگی). تا وقتی الگو فعال است تا کندل جاری ادامه پیدا می‌کند.
+   datetime bEnd = s.timeB + tfSecs * LineBLength;
+   if(ExtendBLineToNow && active && rates_total > 0)
+   {
+      datetime nowBar = rates[rates_total - 1].time + tfSecs * 2;
+      if(nowBar > bEnd) bEnd = nowBar;
+   }
+
    if(ObjectFind(0, extLine) >= 0) ObjectDelete(0, extLine);
-   ObjectCreate(0, extLine, OBJ_TREND, 0, s.timeB, s.priceB, s.timeB + tfSecs * LineBLength, s.priceB);
+   ObjectCreate(0, extLine, OBJ_TREND, 0, s.timeB, s.priceB, bEnd, s.priceB);
    ObjectSetInteger(0, extLine, OBJPROP_COLOR, drawColor);
    ObjectSetInteger(0, extLine, OBJPROP_WIDTH, 2);
    ObjectSetInteger(0, extLine, OBJPROP_RAY_RIGHT, false);
 
-   // --- خط میانی
+   // --- خط میانی (سطح 50 درصد اصلاح)
    double midPrice = (s.priceA + s.priceB) / 2.0;
    if(ObjectFind(0, midLine) >= 0) ObjectDelete(0, midLine);
    ObjectCreate(0, midLine, OBJ_TREND, 0, s.timeB, midPrice, s.timeB + tfSecs * LineMidLength, midPrice);
@@ -819,6 +1061,88 @@ void DrawSwing(SwingAB &s, TFCategory cat, ENUM_TIMEFRAMES tf, color drawColor, 
    ObjectSetInteger(0, midLine, OBJPROP_STYLE, STYLE_DASH);
    ObjectSetInteger(0, midLine, OBJPROP_WIDTH, 2);
    ObjectSetInteger(0, midLine, OBJPROP_RAY_RIGHT, false);
+
+   if(!UsesLifecycle(cat)) return;
+
+   // --- سطح 20 درصد اصلاح
+   if(Show20PercentLine)
+   {
+      double dir      = s.isBull ? -1.0 : 1.0;
+      double level20  = s.priceB + dir * s.size * RetraceMinPercent / 100.0;
+      string line20   = base + "_L20";
+
+      if(ObjectFind(0, line20) >= 0) ObjectDelete(0, line20);
+      ObjectCreate(0, line20, OBJ_TREND, 0, s.timeB, level20, s.timeB + tfSecs * LineMidLength, level20);
+      ObjectSetInteger(0, line20, OBJPROP_COLOR, drawColor);
+      ObjectSetInteger(0, line20, OBJPROP_STYLE, STYLE_DOT);
+      ObjectSetInteger(0, line20, OBJPROP_WIDTH, 1);
+      ObjectSetInteger(0, line20, OBJPROP_RAY_RIGHT, false);
+   }
+
+   // --- لیبل C
+   if(s.idxC >= 0 && (s.state == AB_RETRACED || s.state == AB_BROKEN))
+   {
+      string labelC = base + "_C";
+      if(ObjectFind(0, labelC) >= 0) ObjectDelete(0, labelC);
+      ObjectCreate(0, labelC, OBJ_TEXT, 0, s.timeC, s.priceC);
+      ObjectSetInteger(0, labelC, OBJPROP_COLOR, LabelColor);
+      ObjectSetString(0, labelC, OBJPROP_TEXT, "C");
+   }
+
+   // --- علامت کندل شکست
+   if(s.state == AB_BROKEN && s.idxBreakTo >= 0)
+   {
+      string brkName = base + "_BRK";
+      if(ObjectFind(0, brkName) >= 0) ObjectDelete(0, brkName);
+      ObjectCreate(0, brkName, OBJ_RECTANGLE, 0,
+                   rates[s.idxBreakFrom].time, s.breakLow,
+                   rates[s.idxBreakTo].time,   s.breakHigh);
+      ObjectSetInteger(0, brkName, OBJPROP_COLOR, drawColor);
+      ObjectSetInteger(0, brkName, OBJPROP_STYLE, STYLE_DOT);
+      ObjectSetInteger(0, brkName, OBJPROP_BACK, true);
+   }
+
+   // --- فلش سیگنال ورود
+   if(ShowEntrySignal && s.idxSignal >= 0)
+   {
+      string sigName = base + "_SIG";
+      if(ObjectFind(0, sigName) >= 0) ObjectDelete(0, sigName);
+      // AB صعودی: هانت بالای B و بازگشت به پایین → سیگنال فروش
+      ObjectCreate(0, sigName, s.isBull ? OBJ_ARROW_SELL : OBJ_ARROW_BUY, 0, s.timeSignal, s.priceSignal);
+      ObjectSetInteger(0, sigName, OBJPROP_COLOR, drawColor);
+      ObjectSetInteger(0, sigName, OBJPROP_WIDTH, 2);
+   }
+
+   // --- برچسب وضعیت کنار خط B
+   if(ShowStateLabel && !s.live)
+   {
+      string stName = base + "_ST";
+      if(ObjectFind(0, stName) >= 0) ObjectDelete(0, stName);
+      ObjectCreate(0, stName, OBJ_TEXT, 0, bEnd, s.priceB);
+      ObjectSetInteger(0, stName, OBJPROP_COLOR, drawColor);
+      ObjectSetInteger(0, stName, OBJPROP_FONTSIZE, 8);
+      ObjectSetString(0, stName, OBJPROP_TEXT, "  " + StateText(s.state));
+   }
+}
+
+//+------------------------------------------------------------------+
+// هشدار لحظات کلیدی. فقط برای رویدادی که روی آخرین کندل بسته شده رخ داده،
+// بنابراین هر رویداد دقیقا یک بار هشدار می‌دهد.
+void MaybeAlert(SwingAB &s, TFCategory cat, ENUM_TIMEFRAMES tf, int rates_total)
+{
+   if(!EnableAlerts) return;
+
+   int lastClosed = rates_total - 2;
+   if(lastClosed < 0) return;
+
+   string tag = _Symbol + " " + TFToStr(tf) + " " + (s.isBull ? "BULL" : "BEAR");
+
+   if(s.idxSignal == lastClosed)
+      Alert("ShinMim ", tag, ": سیگنال ورود");
+   else if(s.state == AB_BROKEN && s.idxBreakTo == lastClosed)
+      Alert("ShinMim ", tag, ": شکست سطح B - برو تایم پایین تر");
+   else if(s.state == AB_RETRACED && s.idxC == lastClosed)
+      Alert("ShinMim ", tag, ": اصلاح معتبر شد (C)");
 }
 
 //+------------------------------------------------------------------+
@@ -836,12 +1160,22 @@ void ProcessIndicator()
    else if(cat == ENTRY)     maxLookback = MaxLookbackEntry;
 
    ENUM_TIMEFRAMES tf = (cat == STRUCTURE) ? StructureTF : (cat == TRIGGER) ? TriggerTF : EntryTF;
+   bool lifecycle = UsesLifecycle(cat);
 
    datetime curBar = iTime(_Symbol, _Period, 0);
    if(curBar == 0) return;
 
-   // فقط به تعداد کندل مورد نیاز کپی می‌کنیم تا اسکن روی هر تیک هم سبک بماند
-   int needed = maxLookback + MaxCandles + SwingLookAhead + 10;
+   // با چرخه عمر، محاسبه فقط با بسته شدن کندل انجام می‌شود: هم چون وضعیت الگو
+   // فقط روی کندل بسته شده معنی دارد، هم چون اسکن تاریخچه بلند روی هر تیک سنگین است.
+   bool newBarOrForced = (forceRedraw || curBar != lastBarTime);
+   if(lifecycle && !newBarOrForced) return;
+
+   // با چرخه عمر، تاریخچه بلندتری لازم است تا الگویی که مدت‌ها پیش شکل گرفته
+   // و هنوز معتبر است از پنجره اسکن بیرون نیفتد.
+   int needed;
+   if(lifecycle) needed = ABCDHistoryBars;
+   else          needed = maxLookback + MaxCandles + SwingLookAhead + 10;
+
    int available = Bars(_Symbol, _Period);
    if(available <= 0) return;
    if(needed > available) needed = available;
@@ -851,44 +1185,95 @@ void ProcessIndicator()
    int rates_total = CopyRates(_Symbol, _Period, 0, needed, rates);
    if(rates_total <= MinCandles) return;
 
+   // میانگین رنج کندل ها برای سنجش «کندل خیلی کوچک نباشد»
+   double sumRange = 0.0;
+   for(int m = 0; m < rates_total; m++)
+      sumRange += (rates[m].high - rates[m].low);
+   double avgRange = sumRange / rates_total;
+
+   // با چرخه عمر کل تاریخچه اسکن می‌شود، وگرنه فقط پنجره lookback
+   int scanFrom = lifecycle ? MinCandles : (rates_total - maxLookback - MaxCandles);
+
    SwingAB raw[];
-   int nRaw = CollectSwings(rates, rates_total, maxLookback, raw);
+   int nRaw = CollectSwings(rates, rates_total, scanFrom, raw);
 
    SwingAB kept[];
-   int nKept = ReduceSwings(raw, nRaw, kept);
+   int nKept = 0;
 
-   // پیش فرض فقط دو AB آخر؛ با تیک زدن ShowPreviousABs کل محدوده چک
-   int firstIdx = 0;
-   if(!ShowPreviousABs && nKept > 2) firstIdx = nKept - 2;
+   if(lifecycle)
+   {
+      // چرخه عمر هر AB بازپخش می‌شود و فقط الگوهای فعال نگه داشته می‌شوند
+      ArrayResize(kept, nRaw);
+      for(int k = 0; k < nRaw; k++)
+      {
+         EvaluateLifecycle(raw[k], rates, rates_total, avgRange);
 
-   // امضای AB های قطعی شده. اگر عوض شده باشد باید کامل بازترسیم کنیم،
+         if(raw[k].state == AB_INVALID || raw[k].state == AB_DONE)
+            continue;
+
+         kept[nKept] = raw[k];
+         nKept++;
+      }
+      ArrayResize(kept, nKept);
+   }
+   else
+   {
+      nKept = ReduceSwings(raw, nRaw, kept);
+      for(int k = 0; k < nKept; k++)
+         kept[k].state = kept[k].live ? AB_FORMING : AB_WAIT_RETRACE;
+
+      // بدون چرخه عمر، پیش فرض فقط دو AB آخر
+      if(!ShowPreviousABs && nKept > 2)
+      {
+         int firstIdx = nKept - 2;
+         for(int k = 0; k < 2; k++)
+            kept[k] = kept[firstIdx + k];
+         nKept = 2;
+         ArrayResize(kept, nKept);
+      }
+   }
+
+   // تایم ورود فقط آخرین AB را نگه می‌دارد
+   if(cat == ENTRY && nKept > 1)
+   {
+      kept[0] = kept[nKept - 1];
+      nKept = 1;
+      ArrayResize(kept, nKept);
+   }
+
+   // امضای وضعیت الگوهای قطعی شده. اگر عوض شود باید کامل بازترسیم کنیم،
    // حتی اگر هنوز کندل جدیدی باز نشده باشد.
    string sig = "";
-   for(int k = firstIdx; k < nKept; k++)
+   for(int k = 0; k < nKept; k++)
       if(!kept[k].live)
-         sig += IntegerToString((long)kept[k].timeA) + "/" + DoubleToString(kept[k].priceB, _Digits) + ";";
+         sig += IntegerToString((long)kept[k].timeA) + "/" +
+                IntegerToString((int)kept[k].state)  + "/" +
+                DoubleToString(kept[k].priceB, _Digits) + ";";
 
    bool fullRedraw = (forceRedraw || curBar != lastBarTime || sig != lastConfirmedSig);
 
    if(fullRedraw)
    {
-      DeleteObjectsOfTF(cat, tf);      // همه چیز، شامل خط‌چین زنده قبلی
+      DeleteObjectsOfTF(cat, tf);
       lastBarTime      = curBar;
       forceRedraw      = false;
       lastConfirmedSig = sig;
    }
    else
    {
-      DeleteLiveObjectsOfTF(cat, tf);  // فقط سویینگ زنده بازسازی می‌شود
+      DeleteLiveObjectsOfTF(cat, tf);
    }
 
    color drawColor = GetCategoryColor(cat);
    int   tfSecs    = PeriodSeconds(tf);
 
-   for(int k = firstIdx; k < nKept; k++)
+   for(int k = 0; k < nKept; k++)
    {
       if(fullRedraw || kept[k].live)
          DrawSwing(kept[k], cat, tf, drawColor, tfSecs, rates, rates_total);
+
+      if(fullRedraw && lifecycle)
+         MaybeAlert(kept[k], cat, tf, rates_total);
    }
 
    ChartRedraw();
