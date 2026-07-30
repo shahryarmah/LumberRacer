@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
-//|                                              ShinMim V1.11.mq5   |
+//|                                              ShinMim V1.12.mq5   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "1.11"
+#property version   "1.12"
 #property indicator_chart_window
 
 // این اندیکاتور فقط با آبجکت‌های گرافیکی کار می‌کند و هیچ بافری ندارد،
@@ -45,6 +45,9 @@ input int    LabelShiftCandles    = 1;    // تعداد کندل شیفت لیب
 
 //---- تنظیمات نمایش AB
 input bool   ShowPreviousABs      = false; // نمایش AB های قبلی (وقتی ABCD خاموش است)
+
+//---- فیلتر لگ اصلاحی
+input bool   HideCounterABInRetrace = true; // پنهان کردن AB خلاف جهت که خودش اصلاح الگوی بزرگتر است
 
 //---- مومنتم سویینگ
 input double MomentumMinPercent   = 60.0;  // حداقل درصد AB که باید با بدنه پوشیده شود
@@ -1342,6 +1345,48 @@ void ProcessIndicator()
          nKept++;
       }
       ArrayResize(kept, nKept);
+
+      // یک AB بزرگ که در حال اصلاح است، لگ اصلاحی اش خودش به عنوان یک AB
+      // خلاف جهت تشخیص داده می‌شود. تا وقتی الگوی بزرگتر معتبر است این لگ
+      // فقط اصلاح است نه الگوی مستقل، پس رسم نمی‌شود.
+      // اگر اصلاح از حد مجاز رد شود، الگوی بزرگتر باطل و از kept حذف شده،
+      // بنابراین دیگر والدی وجود ندارد و همان لگ خودبه‌خود مستقل می‌شود.
+      if(HideCounterABInRetrace && nKept > 1)
+      {
+         SwingAB kept2[];
+         ArrayResize(kept2, nKept);
+         int n2 = 0;
+
+         for(int k = 0; k < nKept; k++)
+         {
+            bool isRetraceLeg = false;
+
+            for(int j = 0; j < nKept; j++)
+            {
+               if(j == k) continue;
+               if(kept[j].isBull == kept[k].isBull) continue;
+
+               // والد باید هنوز منتظر اصلاح یا در حال اصلاح باشد
+               if(kept[j].state != AB_WAIT_RETRACE && kept[j].state != AB_RETRACED) continue;
+
+               // و این AB باید بعد از B والد شروع شده باشد، یعنی داخل اصلاح آن
+               if(kept[k].idxA >= kept[j].idxB)
+               {
+                  isRetraceLeg = true;
+                  break;
+               }
+            }
+
+            if(isRetraceLeg) continue;
+
+            kept2[n2] = kept[k];
+            n2++;
+         }
+
+         ArrayResize(kept, n2);
+         for(int k = 0; k < n2; k++) kept[k] = kept2[k];
+         nKept = n2;
+      }
    }
    else
    {
