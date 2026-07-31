@@ -1,133 +1,103 @@
-//+------------------------------------------------------------------+
-//|                                             ABHunterScanner.mq5   |
+﻿//+------------------------------------------------------------------+
+//|                                            ABHunterScanner.mq5   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
-//| اسکنر چند نمادی ABHunter.                                          |
-//| روی یک چارت نصب می‌شود و همه نمادهای انتخابی را در سه تایم فریم    |
-//| اسکن می‌کند، جدول الگوهای فعال را نشان می‌دهد و برای هر AB جدیدی   |
-//| که قطعی شود نوتیفیکیشن موبایل می‌فرستد.                            |
+//| اسکنر چند نمادی ABHunter.                                         |
+//| روی یک چارت اختصاصی نصب می‌شود و همه نمادهای انتخابی را در فهرست   |
+//| تایم فریم های دلخواه اسکن می‌کند، جدول الگوهای فعال را نشان می‌دهد |
+//| و برای هر AB جدیدی که قطعی شود نوتیفیکیشن موبایل می‌فرستد.         |
 //|                                                                  |
-//| قواعد تشخیص از ABHunterCore.mqh می‌آید — همان فایلی که اندیکاتور    |
+//| اسکنر الگو را «رسم» نمی‌کند؛ فقط می‌گوید کجا نگاه کنید. برای دیدن  |
+//| خط AB و نقاط A و C و ناحیه اصلاح، چارت همان نماد و تایم فریم را با |
+//| اندیکاتور ABHunter.mq5 باز کنید.                                  |
+//|                                                                  |
+//| قواعد تشخیص از ABHunterCore.mqh می‌آید — همان فایلی که اندیکاتور   |
 //| چارت هم استفاده می‌کند، تا دو نسخه از منطق وجود نداشته باشد.       |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "2.10"
+#property version   "2.20"
 #property indicator_chart_window
 
 #include "ABHunterCore.mqh"
 
+//---- کدام وضعیت ها به حساب بیایند
+enum PanelFilterMode
+{
+   SHOW_ALL,        // همه
+   SHOW_FROM_COK,   // فقط از «اصلاح معتبر» به بعد
+   SHOW_FROM_HUNT   // فقط آنهایی که B شکسته شده
+};
+
 //---- دامنه اسکن
-input string ScanSymbols       = "";        // نمادها با کاما؛ خالی یعنی همه Market Watch
-input bool   SyncTFWithChart   = true;      // خواندن تایم فریم ها از چارتی که اندیکاتور رویش نصب است
-input ENUM_TIMEFRAMES ScanTF1  = PERIOD_H4; // تایم فریم ساختار (وقتی هماهنگی خاموش یا ناموفق است)
-input ENUM_TIMEFRAMES ScanTF2  = PERIOD_M20;// تایم فریم تریگر
-input ENUM_TIMEFRAMES ScanTF3  = PERIOD_M1; // تایم فریم ورود
-input int    RefreshSeconds    = 30;        // فاصله هر اسکن (ثانیه)
+input string ScanSymbols       = "";   // نمادها با کاما؛ خالی یعنی همه Market Watch
+input string ScanTimeframes    = "H4,H3,H2,H1,M30,M20,M15"; // تایم فریم ها با کاما
+input bool   SyncTFWithChart   = false;// به جای فهرست بالا، سه تایم فریم دکمه های چارت خوانده شود
+input int    RefreshSeconds    = 60;   // فاصله هر اسکن (ثانیه)
 
 //---- نوتیفیکیشن
-input bool   EnablePush        = true;      // نوتیفیکیشن موبایل برای هر AB جدید قطعی شده
-input bool   NotifyTF1         = true;      // اطلاع رسانی برای تایم فریم ساختار
-input bool   NotifyTF2         = true;      // اطلاع رسانی برای تایم فریم تریگر
-input bool   NotifyTF3         = false;     // اطلاع رسانی برای تایم فریم ورود
+input bool   EnablePush        = true; // نوتیفیکیشن موبایل برای هر AB جدید قطعی شده
+input PanelFilterMode NotifyFilter = SHOW_FROM_COK; // برای کدام وضعیت ها اطلاع بدهد
 
 //---- جدول
-input int    PanelX            = 10;        // فاصله جدول از چپ
-input int    PanelY            = 20;        // فاصله جدول از بالا
+input PanelFilterMode PanelFilter = SHOW_ALL; // کدام وضعیت ها در جدول بیایند
+input int    PanelX            = 150;  // فاصله جدول از چپ
+input int    PanelY            = 20;   // فاصله جدول از بالا
 input int    PanelFontSize     = 9;
 input color  PanelTitleColor   = clrWhite;
 input color  PanelTextColor    = clrGainsboro;
 input color  PanelBullColor    = clrDeepSkyBlue;
 input color  PanelBearColor    = clrOrange;
 input color  PanelBackColor    = clrBlack;
-input int    PanelMaxRows      = 25;        // حداکثر ردیف نمایش داده شده
+input int    PanelMaxRows      = 30;   // حداکثر ردیف نمایش داده شده
 
 //+------------------------------------------------------------------+
-string   scanSymbolList[];      // نمادهایی که اسکن می‌شوند
+// یک ردیف جدول
+struct ScanRow
+{
+   string          symbol;
+   ENUM_TIMEFRAMES tf;
+   bool            isBull;
+   ABState         state;
+   bool            hasBreak;
+   int             rank;    // هر چه کمتر، مهم تر
+};
+
+string   scanSymbolList[];
 int      scanSymbolCount = 0;
 
-string   notifiedKeys[];        // کلید الگوهایی که برایشان اطلاع فرستاده شده
-int      notifiedCount = 0;
-bool     firstScanDone = false; // اولین اسکن فقط ثبت می‌کند و اطلاع نمی‌دهد
+ENUM_TIMEFRAMES scanTFList[];
+int      scanTFCount = 0;
+string   tfSource = "";
 
-string   objPrefix;             // پیشوند آبجکت های این چارت
+string   notifiedKeys[];
+int      notifiedCount = 0;
+bool     firstScanDone = false;   // اولین اسکن فقط ثبت می‌کند و اطلاع نمی‌دهد
+
+string   objPrefix;
 int      drawnRows = 0;
 
-ENUM_TIMEFRAMES activeTF[3];    // تایم فریم های همین اسکن
-string   tfSource = "";         // از کجا آمده اند، برای سربرگ جدول
-
 //+------------------------------------------------------------------+
-ENUM_TIMEFRAMES ScanTF(int slot)
+// هر چه رتبه کمتر، الگو به معامله نزدیک تر. جدول با همین مرتب می‌شود تا
+// وقتی ردیف ها از سقف نمایش بیشتر شدند، مهم ترین ها بالا بمانند.
+int StateRank(SwingAB &s)
 {
-   return activeTF[slot];
+   if(s.state == AB_BROKEN)       return s.hasValidBreak ? 0 : 1;
+   if(s.state == AB_RETRACED)     return 2;
+   if(s.state == AB_WAIT_RETRACE) return 3;
+   return 4;
 }
 
-//+------------------------------------------------------------------+
-// خواندن تایم فریم ها از چارتی که اندیکاتور ABHunter رویش نصب است.
-// اندیکاتور انتخاب سه دکمه را در آبجکت ABH_State_<chartID> نگه می‌دارد، پس
-// کافیست چارت های باز را بگردیم و اولین چارتی که چنین آبجکتی دارد را بخوانیم.
-// اینطوری هر بار با دکمه ها تایم فریم را عوض کنید، اسکن بعدی همان را می‌گیرد.
-bool ReadTFsFromChart()
+bool PassesFilter(int rank, PanelFilterMode mode)
 {
-   long id = ChartFirst();
-
-   while(id >= 0)
-   {
-      string obj = StateObjectName(id);
-
-      if(ObjectFind(id, obj) >= 0)
-      {
-         string txt = ObjectGetString(id, obj, OBJPROP_TEXT);
-         int p1 = StringFind(txt, "|");
-         int p2 = (p1 >= 0) ? StringFind(txt, "|", p1 + 1) : -1;
-
-         if(p1 >= 0 && p2 > p1)
-         {
-            int i1 = ClampIdx((int)StringToInteger(StringSubstr(txt, 0, p1)), ArraySize(StructureTFList));
-            int i2 = ClampIdx((int)StringToInteger(StringSubstr(txt, p1 + 1, p2 - (p1 + 1))), ArraySize(TriggerTFList));
-            int i3 = ClampIdx((int)StringToInteger(StringSubstr(txt, p2 + 1)), ArraySize(EntryTFList));
-
-            activeTF[0] = StructureTFList[i1];
-            activeTF[1] = TriggerTFList[i2];
-            activeTF[2] = EntryTFList[i3];
-            tfSource    = ChartSymbol(id);
-            return true;
-         }
-      }
-
-      id = ChartNext(id);
-   }
-
-   return false;
-}
-
-// تایم فریم های این اسکن را تعیین می‌کند: اول از چارت، وگرنه از ورودی ها
-void ResolveTFs()
-{
-   if(SyncTFWithChart && ReadTFsFromChart()) return;
-
-   activeTF[0] = ScanTF1;
-   activeTF[1] = ScanTF2;
-   activeTF[2] = ScanTF3;
-   tfSource    = SyncTFWithChart ? "inputs (no chart)" : "inputs";
-}
-
-bool NotifyForSlot(int slot)
-{
-   if(slot == 0) return NotifyTF1;
-   if(slot == 1) return NotifyTF2;
-   return NotifyTF3;
-}
-
-color SlotColor(int slot, bool isBull)
-{
-   return isBull ? PanelBullColor : PanelBearColor;
+   if(mode == SHOW_FROM_HUNT) return (rank <= 1);
+   if(mode == SHOW_FROM_COK)  return (rank <= 2);
+   return true;
 }
 
 //+------------------------------------------------------------------+
-// ساخت فهرست نمادها: اگر ScanSymbols خالی باشد از Market Watch، وگرنه از
-// همان لیست. نمادهایی که در ترمینال وجود ندارند کنار گذاشته می‌شوند.
+// فهرست نمادها: خالی یعنی همه Market Watch، وگرنه همان لیست با کاما
 void BuildSymbolList()
 {
    ArrayResize(scanSymbolList, 0);
@@ -171,6 +141,69 @@ void BuildSymbolList()
 }
 
 //+------------------------------------------------------------------+
+// خواندن سه تایم فریم از چارتی که اندیکاتور ABHunter رویش نصب است.
+// اندیکاتور انتخاب دکمه ها را در آبجکت ABH_State_<chartID> نگه می‌دارد.
+bool ReadTFsFromChart()
+{
+   long id = ChartFirst();
+
+   while(id >= 0)
+   {
+      string obj = StateObjectName(id);
+
+      if(ObjectFind(id, obj) >= 0)
+      {
+         string txt = ObjectGetString(id, obj, OBJPROP_TEXT);
+         int p1 = StringFind(txt, "|");
+         int p2 = (p1 >= 0) ? StringFind(txt, "|", p1 + 1) : -1;
+
+         if(p1 >= 0 && p2 > p1)
+         {
+            int i1 = ClampIdx((int)StringToInteger(StringSubstr(txt, 0, p1)), ArraySize(StructureTFList));
+            int i2 = ClampIdx((int)StringToInteger(StringSubstr(txt, p1 + 1, p2 - (p1 + 1))), ArraySize(TriggerTFList));
+            int i3 = ClampIdx((int)StringToInteger(StringSubstr(txt, p2 + 1)), ArraySize(EntryTFList));
+
+            ArrayResize(scanTFList, 3);
+            scanTFList[0] = StructureTFList[i1];
+            scanTFList[1] = TriggerTFList[i2];
+            scanTFList[2] = EntryTFList[i3];
+            scanTFCount   = 3;
+            tfSource      = "chart " + ChartSymbol(id);
+            return true;
+         }
+      }
+
+      id = ChartNext(id);
+   }
+
+   return false;
+}
+
+// فهرست تایم فریم های این اسکن
+void BuildTFList()
+{
+   if(SyncTFWithChart && ReadTFsFromChart()) return;
+
+   ArrayResize(scanTFList, 0);
+   scanTFCount = 0;
+
+   string parts[];
+   int n = StringSplit(ScanTimeframes, ',', parts);
+   ArrayResize(scanTFList, n);
+
+   for(int i = 0; i < n; i++)
+   {
+      ENUM_TIMEFRAMES tf = StrToTF(parts[i]);
+      if(tf == 0) continue;                      // رشته نامعتبر رد می‌شود
+      scanTFList[scanTFCount] = tf;
+      scanTFCount++;
+   }
+
+   ArrayResize(scanTFList, scanTFCount);
+   tfSource = "inputs";
+}
+
+//+------------------------------------------------------------------+
 bool AlreadyNotified(string key)
 {
    for(int i = 0; i < notifiedCount; i++)
@@ -181,7 +214,7 @@ bool AlreadyNotified(string key)
 void RememberNotified(string key)
 {
    // فهرست بی نهایت رشد نکند: نصف قدیمی ها دور ریخته می‌شود
-   if(notifiedCount >= 4000)
+   if(notifiedCount >= 6000)
    {
       int keep = notifiedCount / 2;
       for(int i = 0; i < keep; i++)
@@ -190,7 +223,7 @@ void RememberNotified(string key)
    }
 
    if(notifiedCount >= ArraySize(notifiedKeys))
-      ArrayResize(notifiedKeys, notifiedCount + 256);
+      ArrayResize(notifiedKeys, notifiedCount + 512);
 
    notifiedKeys[notifiedCount] = key;
    notifiedCount++;
@@ -211,8 +244,8 @@ void DeletePanel()
 void PanelBackground(int rows)
 {
    string name = objPrefix + "BG";
-   int height = 22 + rows * (PanelFontSize + 7) + 8;
-   int width  = 330;
+   int height = rows * (PanelFontSize + 7) + 14;
+   int width  = 320;
 
    if(ObjectFind(0, name) < 0)
    {
@@ -249,7 +282,6 @@ void PanelRow(int row, string text, color clr)
    ObjectSetString(0, name, OBJPROP_TEXT, text);
 }
 
-// ردیف های اضافه از اسکن قبلی پاک می‌شوند
 void ClearRowsFrom(int firstRow)
 {
    for(int r = firstRow; r < drawnRows; r++)
@@ -259,8 +291,6 @@ void ClearRowsFrom(int firstRow)
    }
 }
 
-//+------------------------------------------------------------------+
-// یک ردیف با عرض ثابت تا ستون ها زیر هم بمانند
 string PadRight(string s, int width)
 {
    string r = s;
@@ -272,34 +302,25 @@ string PadRight(string s, int width)
 void RunScan()
 {
    if(scanSymbolCount == 0) BuildSymbolList();
+   BuildTFList();
 
-   ResolveTFs();
-
-   int row = 0;
-   PanelRow(row, "TF: " + TFToStr(activeTF[0]) + " / " + TFToStr(activeTF[1]) +
-                 " / " + TFToStr(activeTF[2]) + "   <- " + tfSource, PanelTitleColor);
-   row++;
-   PanelRow(row, PadRight("SYMBOL", 12) + PadRight("TF", 5) + PadRight("DIR", 5) + "STATE", PanelTitleColor);
-   row++;
-
-   int found = 0;
+   ScanRow rows[];
+   int nRows = 0;
+   ArrayResize(rows, 256);
 
    for(int si = 0; si < scanSymbolCount; si++)
    {
       string sym = scanSymbolList[si];
 
-      for(int slot = 0; slot < 3; slot++)
+      for(int ti = 0; ti < scanTFCount; ti++)
       {
-         ENUM_TIMEFRAMES tf = ScanTF(slot);
+         ENUM_TIMEFRAMES tf = scanTFList[ti];
 
          MqlRates rates[];
          int rates_total = 0;
          SwingAB active[];
 
-         // تایم ورود مثل اندیکاتور فقط آخرین AB را نگه می‌دارد
-         bool keepOnlyLast = (slot == 2);
-
-         int n = AnalyzeSymbol(sym, tf, ABCDHistoryBars, 30, keepOnlyLast, false,
+         int n = AnalyzeSymbol(sym, tf, ABCDHistoryBars, 30, false, false,
                                rates, rates_total, active);
 
          // داده هنوز آماده نیست؛ متاتریدر آن را در پس زمینه دانلود می‌کند
@@ -310,7 +331,7 @@ void RunScan()
          {
             if(active[k].live) continue;   // هنوز قطعی نشده
 
-            found++;
+            int rank = StateRank(active[k]);
 
             // --- نوتیفیکیشن برای هر AB جدیدی که قطعی شده
             string key = sym + "|" + IntegerToString((int)tf) + "|" +
@@ -320,33 +341,83 @@ void RunScan()
             {
                RememberNotified(key);
 
-               // اولین اسکن فقط ثبت می‌کند، وگرنه با انبوه اطلاع رسانی
-               // از الگوهای قدیمی روبرو می‌شوید
-               if(firstScanDone && EnablePush && NotifyForSlot(slot))
+               // اولین اسکن فقط ثبت می‌کند، وگرنه لحظه نصب با انبوه
+               // اطلاع رسانی از الگوهای قدیمی روبرو می‌شوید
+               if(firstScanDone && EnablePush && PassesFilter(rank, NotifyFilter))
                {
                   SendNotification("ABHunter " + sym + " " + TFToStr(tf) + " " +
                                    (active[k].isBull ? "BULL" : "BEAR") +
-                                   " AB " + StateText(active[k]));
+                                   " " + StateText(active[k]));
                }
             }
 
-            // --- ردیف جدول
-            if(row - 2 < PanelMaxRows)
-            {
-               string line = PadRight(sym, 12) +
-                             PadRight(TFToStr(tf), 5) +
-                             PadRight(active[k].isBull ? "BULL" : "BEAR", 5) +
-                             StateText(active[k]);
-               PanelRow(row, line, SlotColor(slot, active[k].isBull));
-               row++;
-            }
+            if(!PassesFilter(rank, PanelFilter)) continue;
+
+            if(nRows >= ArraySize(rows)) ArrayResize(rows, nRows + 256);
+
+            rows[nRows].symbol   = sym;
+            rows[nRows].tf       = tf;
+            rows[nRows].isBull   = active[k].isBull;
+            rows[nRows].state    = active[k].state;
+            rows[nRows].hasBreak = active[k].hasValidBreak;
+            rows[nRows].rank     = rank;
+            nRows++;
          }
       }
    }
 
-   if(found == 0)
+   // --- سربرگ
+   int row = 0;
+   PanelRow(row, "ABHunter  " + IntegerToString(scanSymbolCount) + " sym x " +
+                 IntegerToString(scanTFCount) + " tf  <- " + tfSource, PanelTitleColor);
+   row++;
+   PanelRow(row, PadRight("SYMBOL", 12) + PadRight("TF", 5) + PadRight("DIR", 5) + "STATE",
+            PanelTitleColor);
+   row++;
+
+   // --- ردیف ها به ترتیب اهمیت. مرتب سازی انتخابی ساده کافی است چون فقط
+   //     به تعداد PanelMaxRows بار اجرا می‌شود.
+   int shown = 0;
+   bool used[];
+   if(nRows > 0)
    {
-      PanelRow(row, "(الگوی فعالی پیدا نشد)", PanelTextColor);
+      ArrayResize(used, nRows);
+      for(int i = 0; i < nRows; i++) used[i] = false;
+   }
+
+   while(shown < PanelMaxRows)
+   {
+      int best = -1;
+      for(int i = 0; i < nRows; i++)
+      {
+         if(used[i]) continue;
+         if(best < 0 || rows[i].rank < rows[best].rank) best = i;
+      }
+      if(best < 0) break;
+
+      used[best] = true;
+
+      string dir = rows[best].isBull ? "BULL" : "BEAR";
+      string st  = (rows[best].state == AB_BROKEN)
+                      ? (rows[best].hasBreak ? "BREAK" : "HUNT")
+                      : (rows[best].state == AB_RETRACED ? "C ok" : "WAIT");
+
+      PanelRow(row, PadRight(rows[best].symbol, 12) +
+                    PadRight(TFToStr(rows[best].tf), 5) +
+                    PadRight(dir, 5) + st,
+               rows[best].isBull ? PanelBullColor : PanelBearColor);
+      row++;
+      shown++;
+   }
+
+   if(nRows == 0)
+   {
+      PanelRow(row, "(no active pattern)", PanelTextColor);
+      row++;
+   }
+   else if(nRows > shown)
+   {
+      PanelRow(row, "... +" + IntegerToString(nRows - shown) + " more", PanelTextColor);
       row++;
    }
 
@@ -364,13 +435,13 @@ int OnInit()
 {
    objPrefix = "ABHScan_" + IntegerToString(ChartID()) + "_";
 
-   ArrayResize(notifiedKeys, 256);
+   ArrayResize(notifiedKeys, 512);
    notifiedCount = 0;
    firstScanDone = false;
    drawnRows     = 0;
 
    BuildSymbolList();
-   ResolveTFs();
+   BuildTFList();
 
    int period = RefreshSeconds;
    if(period < 5) period = 5;
