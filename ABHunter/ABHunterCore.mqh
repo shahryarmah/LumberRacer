@@ -247,6 +247,37 @@ int CollectSwings(MqlRates &rates[], int rates_total, int scanFrom, SwingAB &out
          if(idxA == idxB) continue;
          if(idxB - idxA + 1 < MinCandles) continue;
 
+         // --- شمارش دوباره روی محدوده واقعی AB.
+         // شمارش بالا روی «پنجره تشخیص» انجام شد، ولی چیزی که رسم می‌شود
+         // محدوده [idxA, idxB] است و این دو یکی نیستند: A تا اولین کندل
+         // هم جهت جلو می‌آید و B تا اولین اصلاح به جلو ادامه پیدا می‌کند.
+         // بدون این بررسی، شرط «حداقل MinCandles کندل هم جهت» روی خود AB
+         // تضمین نمی‌شود و مثلا 2 کندل صعودی با یک کندل مخالف قبول می‌شد،
+         // چون شرط قبلی فقط تعداد میله را می‌شمرد نه کندل های هم جهت را.
+         int abBull = 0, abBear = 0, abNonStd = 0;
+
+         for(int m = idxA; m <= idxB; m++)
+         {
+            double abBody  = MathAbs(rates[m].close - rates[m].open);
+            double abRange = rates[m].high - rates[m].low;
+            double abPct   = (abRange == 0) ? 0 : (abBody / abRange) * 100.0;
+
+            if(abPct < MinBodyPercent) abNonStd++;
+            if(rates[m].close > rates[m].open) abBull++;
+            if(rates[m].close < rates[m].open) abBear++;
+         }
+
+         if(abNonStd > MaxNonStandard) continue;
+
+         if(isBullish)
+         {
+            if(abBull < MinCandles || abBear > MaxOppositeCandles) continue;
+         }
+         else
+         {
+            if(abBear < MinCandles || abBull > MaxOppositeCandles) continue;
+         }
+
          // جلوگیری از AB تو در تو
          if(idxB >= lastAcceptedA) continue;
 

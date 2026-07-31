@@ -17,7 +17,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "2.24"
+#property version   "2.30"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
@@ -30,12 +30,14 @@ enum PanelCornerMode
    PANEL_TOP_RIGHT   // بالا راست
 };
 
-//---- کدام وضعیت ها به حساب بیایند
+//---- کدام وضعیت ها به حساب بیایند.
+// اسکنر باید ستاپ را «قبل از» فعال شدنش نشان دهد تا فرصت رفتن به تایم پایین تر
+// باشد. الگویی که B اش هانت شده دیگر موقعیت ورود نمی‌دهد و فقط شلوغی است.
 enum PanelFilterMode
 {
-   SHOW_ALL,        // همه
-   SHOW_FROM_COK,   // فقط از «اصلاح معتبر» به بعد
-   SHOW_FROM_HUNT   // فقط آنهایی که B شکسته شده
+   FILTER_PRE_HUNT,   // AB و ABC که B هنوز هانت نشده
+   FILTER_COK_ONLY,   // فقط ABC کامل (اصلاح معتبر، منتظر شکست)
+   FILTER_ALL         // همه، شامل هانت شده ها
 };
 
 //---- دامنه اسکن
@@ -46,10 +48,10 @@ input int    RefreshSeconds    = 60;   // فاصله هر اسکن (ثانیه)
 
 //---- نوتیفیکیشن
 input bool   EnablePush        = true; // نوتیفیکیشن موبایل برای هر AB جدید قطعی شده
-input PanelFilterMode NotifyFilter = SHOW_FROM_COK; // برای کدام وضعیت ها اطلاع بدهد
+input PanelFilterMode NotifyFilter = FILTER_PRE_HUNT; // برای کدام وضعیت ها اطلاع بدهد
 
 //---- جدول
-input PanelFilterMode PanelFilter = SHOW_ALL; // کدام وضعیت ها در جدول بیایند
+input PanelFilterMode PanelFilter = FILTER_PRE_HUNT; // کدام وضعیت ها در جدول بیایند
 input PanelCornerMode PanelCorner = PANEL_TOP_RIGHT; // جدول در کدام گوشه باشد
 input int    PanelX            = 70;   // فاصله جدول از لبه انتخاب شده
 input int    PanelY            = 20;   // فاصله جدول از بالا
@@ -127,11 +129,12 @@ int StateRank(SwingAB &s)
    return 4;
 }
 
+// rank: 0 = BREAK، 1 = HUNT، 2 = C ok، 3 = WAIT
 bool PassesFilter(int rank, PanelFilterMode mode)
 {
-   if(mode == SHOW_FROM_HUNT) return (rank <= 1);
-   if(mode == SHOW_FROM_COK)  return (rank <= 2);
-   return true;
+   if(mode == FILTER_ALL)      return true;
+   if(mode == FILTER_COK_ONLY) return (rank == 2);
+   return (rank >= 2);   // FILTER_PRE_HUNT: فقط C ok و WAIT
 }
 
 //+------------------------------------------------------------------+
