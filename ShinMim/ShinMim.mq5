@@ -1,12 +1,15 @@
 //+------------------------------------------------------------------+
-//|                                              ShinMim V1.13.mq5   |
+//|                                              ShinMim V2.00.mq5   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "1.13"
+#property version   "2.00"
 #property indicator_chart_window
+
+// قواعد تشخیص و چرخه عمر مشترک با اسکنر
+#include "ShinMimCore.mqh"
 
 // این اندیکاتور فقط با آبجکت‌های گرافیکی کار می‌کند و هیچ بافری ندارد،
 // بنابراین indicator_buffers / indicator_plots تعریف نمی‌شود.
@@ -30,46 +33,20 @@ input color  LabelColor     = clrBlack;        // رنگ لیبل ها
 input int    MaxLookbackStructure = 7;    // تعداد کندل برای ساختار (وقتی ABCD خاموش است)
 input int    MaxLookbackTrigger   = 15;   // تعداد کندل برای تریگر (وقتی ABCD خاموش است)
 input int    MaxLookbackEntry     = 30;   // تعداد کندل برای ورود
-input int    MinCandles           = 3;
-input int    MaxCandles           = 10;
-input int    MaxOppositeCandles   = 1;
-input double MinBodyPercent       = 50.0;  // حداقل درصد بادی کندل (0 تا 100)
-input int    MaxNonStandard       = 1;
 input int    LineBLength          = 10;   // طول خط ادامه از B (بر حسب کندل)
 input int    LineMidLength        = 15;   // طول خط میانی (بر حسب کندل)
 input int    FVGExtendCandles     = 10;
-input double MinABRatio           = 1.0;
-input double MaxABRatio           = 8.0;
 input bool   ShowFVG              = true;
 input int    LabelShiftCandles    = 1;    // تعداد کندل شیفت لیبل ها
 
 //---- تنظیمات نمایش AB
 input bool   ShowPreviousABs      = false; // نمایش AB های قبلی (وقتی ABCD خاموش است)
 
-//---- فیلتر لگ اصلاحی
-input bool   HideCounterABInRetrace = true; // پنهان کردن AB خلاف جهت که خودش اصلاح الگوی بزرگتر است
-
-//---- مومنتم سویینگ
-input double MomentumMinPercent   = 60.0;  // حداقل درصد AB که باید با بدنه پوشیده شود
-input int    MaxNonProgressive    = 1;     // چند کندل مجاز است سقف بالاتر از کندل قبل نسازد
-
-//---- چرخه عمر الگو ABCD
-input bool   EnableABCD           = true;  // ردیابی چرخه عمر و اعتبارسنجی الگو
-input int    ABCDHistoryBars      = 300;   // تعداد کندل تاریخچه برای ردیابی الگو
-input double RetraceMinPercent    = 20.0;  // حداقل درصد اصلاح از AB
-input double RetraceMaxPercent    = 60.0;  // حداکثر درصد اصلاح (با بادی)
-input int    MinRetraceCandles    = 3;     // حداقل کندل اصلاح، از کندل بعد از B
+//---- نمایش الگو روی چارت
 input bool   Show20PercentLine    = true;  // رسم خط حداقل اصلاح (20 درصد)
 input bool   ShowMaxRetraceLine   = true;  // رسم خط حداکثر اصلاح (60 درصد)
 input bool   ShowStateLabel       = true;  // نمایش وضعیت الگو کنار خط B
 input bool   ExtendBLineToNow     = true;  // ادامه خط B تا کندل جاری تا وقتی الگو فعال است
-
-//---- کندل شکست
-input double BreakMinBodyPercent  = 90.0;  // حداقل درصد بادی کندل شکست
-input double BreakMaxWickPercent  = 5.0;   // حداکثر درصد سایه هر طرف
-input double BreakMinSizeRatio    = 1.0;   // حداقل اندازه کندل شکست نسبت به میانگین رنج
-input double BreakMinDistancePct  = 10.0;  // حداقل فاصله اوپن و کلوز از سطح B (درصد از AB)
-input int    BreakMaxCandles      = 3;     // ترکیب حداکثر چند کندل به عنوان یک کندل شکست
 
 //---- سیگنال و هشدار
 input bool   ShowEntrySignal      = true;  // نمایش فلش سیگنال ورود
@@ -81,56 +58,6 @@ input color  CandleTimerColor     = clrGray;   // رنگ تایمر
 
 //+------------------------------------------------------------------+
 enum TFCategory { STRUCTURE, TRIGGER, ENTRY, NONE };
-
-// وضعیت الگو در چرخه عمر
-enum ABState
-{
-   AB_FORMING,        // هنوز در حال تشکیل (B روی کندل جاری)
-   AB_WAIT_RETRACE,   // AB قطعی شد، منتظر اصلاح معتبر
-   AB_RETRACED,       // اصلاح معتبر ثبت شد (C)، منتظر شکست B
-   AB_BROKEN,         // B شکسته شد، نقدینگی هانت شد
-   AB_DONE,           // قیمت به A رسید، کار الگو تمام
-   AB_INVALID         // باطل
-};
-
-// یک سویینگ AB به همراه وضعیت چرخه عمر
-struct SwingAB
-{
-   int      idxA;
-   int      idxB;
-   datetime timeA;
-   datetime timeB;
-   double   priceA;
-   double   priceB;
-   bool     isBull;
-   double   size;       // |priceB - priceA|
-   bool     live;       // B روی کندل جاری بسته نشده است
-
-   ABState  state;
-
-   int      idxC;       // عمیق ترین نقطه اصلاح
-   datetime timeC;
-   double   priceC;
-
-   bool     hasValidBreak; // کندل شکست معتبر تایید شده است
-   int      idxBreakFrom;  // اولین کندل شکست (برای کندل مرکب)
-   int      idxBreakTo;    // آخرین کندل شکست
-   datetime timeBreak;
-   double   breakHigh;
-   double   breakLow;
-
-   double   priceD;     // بیشترین نفوذ بعد از شکست
-
-   int      idxSignal;  // کندلی که سیگنال ورود داد
-   datetime timeSignal;
-   double   priceSignal;
-};
-
-// کندل مرکب از چند کندل متوالی
-struct Composite
-{
-   double open, high, low, close;
-};
 
 // لیست تایم فریم های برای هر دکمه
 ENUM_TIMEFRAMES StructureTFList[9] = {PERIOD_D1, PERIOD_H12, PERIOD_H8, PERIOD_H6, PERIOD_H4, PERIOD_H3, PERIOD_H2, PERIOD_H1, PERIOD_M30};
@@ -492,33 +419,6 @@ void UpdateButton(string btnName, string text)
    ObjectSetInteger(0, btnName, OBJPROP_STATE, false);
 }
 
-string TFToStr(ENUM_TIMEFRAMES tf)
-{
-   switch(tf)
-   {
-      case PERIOD_M1:   return "M1";
-      case PERIOD_M2:   return "M2";
-      case PERIOD_M3:   return "M3";
-      case PERIOD_M4:   return "M4";
-      case PERIOD_M5:   return "M5";
-      case PERIOD_M6:   return "M6";
-      case PERIOD_M10:  return "M10";
-      case PERIOD_M12:  return "M12";
-      case PERIOD_M15:  return "M15";
-      case PERIOD_M20:  return "M20";
-      case PERIOD_M30:  return "M30";
-      case PERIOD_H1:   return "H1";
-      case PERIOD_H2:   return "H2";
-      case PERIOD_H3:   return "H3";
-      case PERIOD_H4:   return "H4";
-      case PERIOD_H6:   return "H6";
-      case PERIOD_H8:   return "H8";
-      case PERIOD_H12:  return "H12";
-      case PERIOD_D1:   return "D1";
-   }
-   return "?";
-}
-
 void ChangeTF(string type, int idx)
 {
    string chartIDStr = IntegerToString(ChartID());
@@ -675,429 +575,6 @@ void DeleteLowerTFObjects()
             ObjectDelete(0, name);
       }
    }
-}
-
-//+------------------------------------------------------------------+
-// جمع آوری سویینگ ها بدون رسم. خروجی به ترتیب زمانی (قدیمی → جدید).
-int CollectSwings(MqlRates &rates[], int rates_total, int scanFrom, SwingAB &out[])
-{
-   ArrayResize(out, rates_total);
-   int cnt = 0;
-
-   int start = (int)MathMax(MinCandles, scanFrom);
-   int i = rates_total - 1;
-
-   // کوچکترین idxA پذیرفته شده تا این لحظه. چون از جدید به قدیم می‌رویم،
-   // هر کاندیدی که idxB آن به این مقدار برسد یعنی داخل سویینگ قبلی افتاده است.
-   int lastAcceptedA = rates_total;
-
-   while(i >= start)
-   {
-      bool found = false;
-
-      for(int len = MaxCandles; len >= MinCandles; len--)
-      {
-         if(i - len + 1 < 0) continue;
-
-         int nonStd = 0, bullCount = 0, bearCount = 0;
-
-         for(int j = 0; j < len; j++)
-         {
-            int idx = i - j;
-            double body = MathAbs(rates[idx].close - rates[idx].open);
-            double candleSize = rates[idx].high - rates[idx].low;
-            double bodyPercent = (candleSize == 0) ? 0 : (body / candleSize) * 100.0;
-
-            if(bodyPercent < MinBodyPercent) nonStd++;
-            if(rates[idx].close > rates[idx].open) bullCount++;
-            if(rates[idx].close < rates[idx].open) bearCount++;
-         }
-
-         if(nonStd > MaxNonStandard) continue;
-
-         // سویینگ باید حداقل MinCandles کندل «هم جهت» داشته باشد، نه اینکه فقط
-         // پنجره ای به طول MinCandles با چند کندل مخالف باشد. بدون شرط دوم،
-         // پنجره 3 کندلی با 1 کندل مخالف عملا فقط 2 کندل هم جهت دارد.
-         bool isBullish = (bearCount <= MaxOppositeCandles && bullCount >= MinCandles);
-         bool isBearish = (bullCount <= MaxOppositeCandles && bearCount >= MinCandles);
-         if(!isBullish && !isBearish) continue;
-
-         int startIdx = i - len + 1;
-         int endIdx   = i;
-
-         int    idxA = startIdx, idxB = startIdx;
-         double priceA = 0.0, priceB = 0.0;
-
-         // A باید «اولین کندل سویینگ» باشد، نه پایین ترین کف داخل پنجره.
-         // کندل های مخالف جهت که ابتدای پنجره افتاده اند کنار گذاشته می‌شوند.
-         if(isBullish)
-         {
-            while(idxA < endIdx && rates[idxA].close <= rates[idxA].open) idxA++;
-            priceA = rates[idxA].low;
-         }
-         else
-         {
-            while(idxA < endIdx && rates[idxA].close >= rates[idxA].open) idxA++;
-            priceA = rates[idxA].high;
-         }
-
-         // B تا «اولین اصلاح معنادار» جلو می‌رود، نه فقط چند کندل ثابت.
-         // با جستجوی ثابت، سقفی که کمی دیرتر ساخته می‌شد از دست می‌رفت.
-         // اصلاح با بادی سنجیده می‌شود، نه با سایه.
-         idxB   = idxA;
-         priceB = isBullish ? rates[idxA].high : rates[idxA].low;
-
-         for(int m = idxA + 1; m < rates_total; m++)
-         {
-            if(isBullish)
-            {
-               if(rates[m].high > priceB) { priceB = rates[m].high; idxB = m; continue; }
-               double swing = priceB - priceA;
-               if(swing > 0.0)
-               {
-                  double bodyLow = MathMin(rates[m].open, rates[m].close);
-                  if((priceB - bodyLow) >= swing * RetraceMinPercent / 100.0) break;
-               }
-            }
-            else
-            {
-               if(rates[m].low < priceB) { priceB = rates[m].low; idxB = m; continue; }
-               double swing = priceA - priceB;
-               if(swing > 0.0)
-               {
-                  double bodyHigh = MathMax(rates[m].open, rates[m].close);
-                  if((bodyHigh - priceB) >= swing * RetraceMinPercent / 100.0) break;
-               }
-            }
-         }
-
-         if(idxA == idxB) continue;
-         if(idxB - idxA + 1 < MinCandles) continue;
-
-         // جلوگیری از AB تو در تو
-         if(idxB >= lastAcceptedA) continue;
-
-         double totalRange = 0.0;
-         for(int k = startIdx; k <= endIdx; k++)
-            totalRange += (rates[k].high - rates[k].low);
-         double avgRange = totalRange / len;
-         if(avgRange <= 0.0) continue;
-
-         double abLength = MathAbs(priceB - priceA);
-         if(abLength < MinABRatio * avgRange || abLength > MaxABRatio * avgRange)
-            continue;
-
-         // --- مومنتم 1: حرکت باید پله ای باشد، یعنی هر کندل سقف بالاتری از
-         //     کندل قبل بسازد (برای نزولی: کف پایین تر). این شرط حرکت درهم را رد می‌کند.
-         int nonProgressive = 0;
-         for(int m = idxA + 1; m <= idxB; m++)
-         {
-            bool progressed = isBullish ? (rates[m].high > rates[m-1].high)
-                                        : (rates[m].low  < rates[m-1].low);
-            if(!progressed) nonProgressive++;
-         }
-         if(nonProgressive > MaxNonProgressive) continue;
-
-         // --- مومنتم 2: گستره بدنه ها باید بخش عمده طول AB را بپوشاند.
-         //     این شرط ABی را رد می‌کند که طولش از یک سایه بلند ساخته شده باشد.
-         double bodyLo = MathMin(rates[idxA].open, rates[idxA].close);
-         double bodyHi = MathMax(rates[idxA].open, rates[idxA].close);
-         for(int m = idxA; m <= idxB; m++)
-         {
-            double lo = MathMin(rates[m].open, rates[m].close);
-            double hi = MathMax(rates[m].open, rates[m].close);
-            if(lo < bodyLo) bodyLo = lo;
-            if(hi > bodyHi) bodyHi = hi;
-         }
-         if((bodyHi - bodyLo) < abLength * MomentumMinPercent / 100.0) continue;
-
-         out[cnt].idxA         = idxA;
-         out[cnt].idxB         = idxB;
-         out[cnt].timeA        = rates[idxA].time;
-         out[cnt].timeB        = rates[idxB].time;
-         out[cnt].priceA       = priceA;
-         out[cnt].priceB       = priceB;
-         out[cnt].isBull       = isBullish;
-         out[cnt].size         = abLength;
-         out[cnt].live         = (idxB == rates_total - 1);
-         out[cnt].state        = AB_FORMING;
-         out[cnt].idxC         = -1;
-         out[cnt].timeC        = 0;
-         out[cnt].priceC       = 0.0;
-         out[cnt].hasValidBreak = false;
-         out[cnt].idxBreakFrom = -1;
-         out[cnt].idxBreakTo   = -1;
-         out[cnt].timeBreak    = 0;
-         out[cnt].breakHigh    = 0.0;
-         out[cnt].breakLow     = 0.0;
-         out[cnt].priceD       = 0.0;
-         out[cnt].idxSignal    = -1;
-         out[cnt].timeSignal   = 0;
-         out[cnt].priceSignal  = 0.0;
-         cnt++;
-
-         lastAcceptedA = idxA;
-         i = idxA - 1;      // پرش به قبل از A، نه فقط به اندازه طول پنجره
-         found = true;
-         break;
-      }
-
-      if(!found) i--;
-   }
-
-   // معکوس کردن به ترتیب زمانی
-   SwingAB tmp;
-   for(int a = 0, b = cnt - 1; a < b; a++, b--)
-   {
-      tmp    = out[a];
-      out[a] = out[b];
-      out[b] = tmp;
-   }
-
-   ArrayResize(out, cnt);
-   return cnt;
-}
-
-//+------------------------------------------------------------------+
-// ساخت کندل مرکب از چند کندل متوالی
-void BuildComposite(MqlRates &rates[], int from, int to, Composite &c)
-{
-   c.open  = rates[from].open;
-   c.close = rates[to].close;
-   c.high  = rates[from].high;
-   c.low   = rates[from].low;
-
-   for(int m = from; m <= to; m++)
-   {
-      if(rates[m].high > c.high) c.high = rates[m].high;
-      if(rates[m].low  < c.low)  c.low  = rates[m].low;
-   }
-}
-
-// کندل شکست معتبر:
-//   بادی حداقل BreakMinBodyPercent درصد کل کندل
-//   هیچ طرف سایه بیش از BreakMaxWickPercent درصد نداشته باشد
-//   کندل خیلی کوچک نباشد (نسبت به میانگین رنج)
-//   اوپن و کلوز هر دو به اندازه کافی از سطح B فاصله داشته باشند
-bool IsValidBreak(Composite &c, bool isBull, double bLevel, double abSize, double avgRange)
-{
-   double range = c.high - c.low;
-   if(range <= 0.0) return false;
-
-   double body = MathAbs(c.close - c.open);
-   if(body / range * 100.0 < BreakMinBodyPercent) return false;
-
-   double upperWick = c.high - MathMax(c.open, c.close);
-   double lowerWick = MathMin(c.open, c.close) - c.low;
-   if(upperWick / range * 100.0 > BreakMaxWickPercent) return false;
-   if(lowerWick / range * 100.0 > BreakMaxWickPercent) return false;
-
-   // کندل نباید خیلی کوچک باشد
-   if(avgRange > 0.0 && range < BreakMinSizeRatio * avgRange) return false;
-
-   // اوپن و کلوز نباید نزدیک سطح B باشند
-   double minDist = abSize * BreakMinDistancePct / 100.0;
-
-   if(isBull)
-   {
-      if(c.close < bLevel + minDist) return false;   // کلوز باید کافی بالاتر از B باشد
-      if(c.open  > bLevel - minDist) return false;   // اوپن باید کافی پایین تر از B باشد
-   }
-   else
-   {
-      if(c.close > bLevel - minDist) return false;
-      if(c.open  < bLevel + minDist) return false;
-   }
-
-   return true;
-}
-
-//+------------------------------------------------------------------+
-// بازپخش چرخه عمر یک AB از کندل بعد از B تا کندل جاری.
-// وضعیت کاملا از روی قیمت بازسازی می‌شود، پس نیازی به ذخیره سازی حالت نیست.
-void EvaluateLifecycle(SwingAB &s, MqlRates &rates[], int rates_total, double avgRange)
-{
-   if(s.live)
-   {
-      s.state = AB_FORMING;
-      return;
-   }
-
-   s.state = AB_WAIT_RETRACE;
-
-   // سطوح اصلاح نسبت به B، در جهت مخالف حرکت AB
-   double dir      = s.isBull ? -1.0 : 1.0;   // اصلاح AB صعودی، نزولی است
-   double levelMin = s.priceB + dir * s.size * RetraceMinPercent / 100.0;
-   double levelMax = s.priceB + dir * s.size * RetraceMaxPercent / 100.0;
-
-   double deepest = s.priceB;   // عمیق ترین نقطه اصلاح تا این لحظه
-
-   // فقط کندل های بسته شده بررسی می‌شوند. کندل جاری هنوز می‌تواند تغییر کند و
-   // اگر آن را حساب کنیم وضعیت الگو وسط کندل بالا و پایین می‌رود (repaint).
-   for(int m = s.idxB + 1; m <= rates_total - 2; m++)
-   {
-      // ردیابی اصلاح تا لحظه شکست B ادامه دارد، نه فقط تا وقتی معتبر شود.
-      // وگرنه اگر قیمت بعد از معتبر شدن اصلاح عمیق تر برود، نه C بروز می‌شود
-      // و نه حد حداکثر اصلاح دیگر بررسی می‌شود.
-      if(s.state == AB_WAIT_RETRACE || s.state == AB_RETRACED)
-      {
-         // عمق اصلاح با بادی سنجیده می‌شود نه با سایه — هم برای حداقل 20 درصد
-         // و هم برای حداکثر. C روی عمیق ترین بدنه می‌نشیند تا با همین معیار
-         // سازگار باشد و CD هم از روی همان حساب شود.
-         double bodyExt = s.isBull ? MathMin(rates[m].open, rates[m].close)
-                                   : MathMax(rates[m].open, rates[m].close);
-
-         bool deeper = s.isBull ? (bodyExt < deepest) : (bodyExt > deepest);
-         if(deeper)
-         {
-            deepest  = bodyExt;
-            s.idxC   = m;
-            s.timeC  = rates[m].time;
-            s.priceC = bodyExt;
-         }
-
-         // باطل: بادی از حداکثر درصد مجاز اصلاح رد شود (سایه ایراد ندارد)
-         bool bodyBeyondMax = s.isBull ? (bodyExt < levelMax) : (bodyExt > levelMax);
-         if(bodyBeyondMax)
-         {
-            s.state = AB_INVALID;
-            return;
-         }
-
-         if(s.state == AB_WAIT_RETRACE)
-         {
-            bool retraceDeepEnough = s.isBull ? (deepest <= levelMin) : (deepest >= levelMin);
-
-            // «حداقل 3 کندل اصلاح» یعنی خود نقطه C حداقل 3 کندل بعد از B باشد،
-            // نه اینکه فقط 3 کندل از B گذشته باشد. با شرط قبلی یک کندل که
-            // پایین می‌رفت و بعد قیمت برمی‌گشت، به اشتباه اصلاح معتبر حساب می‌شد.
-            bool enoughCandles     = (s.idxC >= 0 && (s.idxC - s.idxB) >= MinRetraceCandles);
-
-            // باطل: قیمت سطح B را بشکند بدون اینکه اصلاح کافی رخ داده باشد
-            bool touchedB = s.isBull ? (rates[m].high > s.priceB) : (rates[m].low < s.priceB);
-            if(touchedB && !(retraceDeepEnough && enoughCandles))
-            {
-               s.state = AB_INVALID;
-               return;
-            }
-
-            // بدون continue، اگر اصلاح در همین کندل معتبر شد، شکست هم در همین
-            // کندل بررسی می‌شود و یک کندل عقب نمی‌افتیم
-            if(retraceDeepEnough && enoughCandles)
-               s.state = AB_RETRACED;
-            else
-               continue;
-         }
-      }
-
-      if(s.state == AB_RETRACED)
-      {
-         // همینکه قیمت از سطح B رد شود یعنی نقدینگی برداشته شده — مستقل از
-         // اینکه کندل شکست معتبر باشد یا نه. اعتبار کندل شکست جداگانه بررسی
-         // می‌شود و فقط سیگنال ورود را مسلح می‌کند.
-         bool crossedB = s.isBull ? (rates[m].high > s.priceB) : (rates[m].low < s.priceB);
-         if(!crossedB) continue;
-
-         s.state  = AB_BROKEN;
-         s.priceD = s.isBull ? rates[m].high : rates[m].low;
-      }
-
-      if(s.state == AB_BROKEN)
-      {
-         // ردیابی D (بیشترین نفوذ)
-         if(s.isBull) { if(rates[m].high > s.priceD) s.priceD = rates[m].high; }
-         else         { if(rates[m].low  < s.priceD) s.priceD = rates[m].low;  }
-
-         // باطل: CD بزرگتر از AB شود
-         if(MathAbs(s.priceD - s.priceC) > s.size)
-         {
-            s.state = AB_INVALID;
-            return;
-         }
-
-         if(!s.hasValidBreak)
-         {
-            // دنبال کندل شکست معتبر (تکی یا مرکب از 2 تا BreakMaxCandles کندل)
-            for(int n = 1; n <= BreakMaxCandles; n++)
-            {
-               int from = m - n + 1;
-               if(from <= s.idxC) break;   // کندل مرکب نباید از C عقب تر برود
-
-               Composite c;
-               BuildComposite(rates, from, m, c);
-
-               if(IsValidBreak(c, s.isBull, s.priceB, s.size, avgRange))
-               {
-                  s.hasValidBreak = true;
-                  s.idxBreakFrom  = from;
-                  s.idxBreakTo    = m;
-                  s.timeBreak     = rates[m].time;
-                  s.breakHigh     = c.high;
-                  s.breakLow      = c.low;
-                  break;
-               }
-            }
-         }
-         else if(s.idxSignal < 0)
-         {
-            // سیگنال ورود: کندلی که آن طرف کندل شکست بسته شود.
-            // else یعنی روی خود کندل شکست بررسی نمی‌شود؛ یک کندل نمی‌تواند
-            // آن طرف خودش بسته شود.
-            bool signalled = s.isBull ? (rates[m].close < s.breakLow)
-                                      : (rates[m].close > s.breakHigh);
-            if(signalled)
-            {
-               s.idxSignal   = m;
-               s.timeSignal  = rates[m].time;
-               s.priceSignal = rates[m].close;
-            }
-         }
-
-         // پایان: قیمت به A رسید
-         bool reachedA = s.isBull ? (rates[m].low <= s.priceA) : (rates[m].high >= s.priceA);
-         if(reachedA)
-         {
-            s.state = AB_DONE;
-            return;
-         }
-      }
-   }
-}
-
-//+------------------------------------------------------------------+
-// کاهش زنجیره AB ها (فقط وقتی چرخه عمر خاموش است):
-//   خلاف جهت → هر دو؛ هم جهت + جدید بزرگتر → قبلی حذف؛ هم جهت + جدید کوچکتر → هر دو
-int ReduceSwings(SwingAB &src[], int n, SwingAB &dst[])
-{
-   ArrayResize(dst, n);
-   int m = 0;
-
-   for(int k = 0; k < n; k++)
-   {
-      while(m > 0 && dst[m-1].isBull == src[k].isBull && src[k].size > dst[m-1].size)
-         m--;
-
-      dst[m] = src[k];
-      m++;
-   }
-
-   return m;
-}
-
-//+------------------------------------------------------------------+
-string StateText(SwingAB &s)
-{
-   switch(s.state)
-   {
-      case AB_FORMING:      return "...";
-      case AB_WAIT_RETRACE: return "WAIT";
-      case AB_RETRACED:     return "C ok";
-      // HUNT یعنی قیمت از B رد شد؛ BREAK یعنی کندل شکست هم معتبر بود
-      case AB_BROKEN:       return s.hasValidBreak ? "BREAK" : "HUNT";
-      case AB_DONE:         return "DONE";
-      case AB_INVALID:      return "X";
-   }
-   return "";
 }
 
 //+------------------------------------------------------------------+
@@ -1302,123 +779,20 @@ void ProcessIndicator()
    else if(cat == ENTRY)     maxLookback = MaxLookbackEntry;
 
    ENUM_TIMEFRAMES tf = (cat == STRUCTURE) ? StructureTF : (cat == TRIGGER) ? TriggerTF : EntryTF;
-   bool lifecycle = UsesLifecycle(cat);
 
    datetime curBar = iTime(_Symbol, _Period, 0);
    if(curBar == 0) return;
 
-   // با چرخه عمر، تاریخچه بلندتری لازم است تا الگویی که مدت‌ها پیش شکل گرفته
-   // و هنوز معتبر است از پنجره اسکن بیرون نیفتد.
-   int needed;
-   if(lifecycle) needed = ABCDHistoryBars;
-   else          needed = maxLookback + MaxCandles + 10;
-
-   int available = Bars(_Symbol, _Period);
-   if(available <= 0) return;
-   if(needed > available) needed = available;
-
+   // تشخیص، چرخه عمر و فیلترها همگی در ShinMimCore انجام می‌شوند تا اندیکاتور
+   // و اسکنر دقیقا یک منطق داشته باشند. اینجا فقط رسم می‌ماند.
    MqlRates rates[];
-   ArraySetAsSeries(rates, false);   // ایندکس 0 = قدیمی ترین کندل
-   int rates_total = CopyRates(_Symbol, _Period, 0, needed, rates);
-   if(rates_total <= MinCandles) return;
-
-   // میانگین رنج کندل ها برای سنجش «کندل خیلی کوچک نباشد»
-   double sumRange = 0.0;
-   for(int m = 0; m < rates_total; m++)
-      sumRange += (rates[m].high - rates[m].low);
-   double avgRange = sumRange / rates_total;
-
-   // با چرخه عمر کل تاریخچه اسکن می‌شود، وگرنه فقط پنجره lookback
-   int scanFrom = lifecycle ? MinCandles : (rates_total - maxLookback - MaxCandles);
-
-   SwingAB raw[];
-   int nRaw = CollectSwings(rates, rates_total, scanFrom, raw);
-
+   int rates_total = 0;
    SwingAB kept[];
-   int nKept = 0;
 
-   if(lifecycle)
-   {
-      // چرخه عمر هر AB بازپخش می‌شود و فقط الگوهای فعال نگه داشته می‌شوند
-      ArrayResize(kept, nRaw);
-      for(int k = 0; k < nRaw; k++)
-      {
-         EvaluateLifecycle(raw[k], rates, rates_total, avgRange);
-
-         if(raw[k].state == AB_INVALID || raw[k].state == AB_DONE)
-            continue;
-
-         kept[nKept] = raw[k];
-         nKept++;
-      }
-      ArrayResize(kept, nKept);
-
-      // یک AB بزرگ که در حال اصلاح است، لگ اصلاحی اش خودش به عنوان یک AB
-      // خلاف جهت تشخیص داده می‌شود. تا وقتی الگوی بزرگتر معتبر است این لگ
-      // فقط اصلاح است نه الگوی مستقل، پس رسم نمی‌شود.
-      // اگر اصلاح از حد مجاز رد شود، الگوی بزرگتر باطل و از kept حذف شده،
-      // بنابراین دیگر والدی وجود ندارد و همان لگ خودبه‌خود مستقل می‌شود.
-      if(HideCounterABInRetrace && nKept > 1)
-      {
-         SwingAB kept2[];
-         ArrayResize(kept2, nKept);
-         int n2 = 0;
-
-         for(int k = 0; k < nKept; k++)
-         {
-            bool isRetraceLeg = false;
-
-            for(int j = 0; j < nKept; j++)
-            {
-               if(j == k) continue;
-               if(kept[j].isBull == kept[k].isBull) continue;
-
-               // والد باید هنوز منتظر اصلاح یا در حال اصلاح باشد
-               if(kept[j].state != AB_WAIT_RETRACE && kept[j].state != AB_RETRACED) continue;
-
-               // و این AB باید بعد از B والد شروع شده باشد، یعنی داخل اصلاح آن
-               if(kept[k].idxA >= kept[j].idxB)
-               {
-                  isRetraceLeg = true;
-                  break;
-               }
-            }
-
-            if(isRetraceLeg) continue;
-
-            kept2[n2] = kept[k];
-            n2++;
-         }
-
-         ArrayResize(kept, n2);
-         for(int k = 0; k < n2; k++) kept[k] = kept2[k];
-         nKept = n2;
-      }
-   }
-   else
-   {
-      nKept = ReduceSwings(raw, nRaw, kept);
-      for(int k = 0; k < nKept; k++)
-         kept[k].state = kept[k].live ? AB_FORMING : AB_WAIT_RETRACE;
-
-      // بدون چرخه عمر، پیش فرض فقط دو AB آخر
-      if(!ShowPreviousABs && nKept > 2)
-      {
-         int firstIdx = nKept - 2;
-         for(int k = 0; k < 2; k++)
-            kept[k] = kept[firstIdx + k];
-         nKept = 2;
-         ArrayResize(kept, nKept);
-      }
-   }
-
-   // تایم ورود فقط آخرین AB را نگه می‌دارد
-   if(cat == ENTRY && nKept > 1)
-   {
-      kept[0] = kept[nKept - 1];
-      nKept = 1;
-      ArrayResize(kept, nKept);
-   }
+   int nKept = AnalyzeSymbol(_Symbol, tf, ABCDHistoryBars, maxLookback,
+                             (cat == ENTRY), ShowPreviousABs,
+                             rates, rates_total, kept);
+   if(nKept < 0) return;
 
    // امضای وضعیت الگوهای قطعی شده. اگر عوض شود باید کامل بازترسیم کنیم،
    // حتی اگر هنوز کندل جدیدی باز نشده باشد.
@@ -1451,7 +825,7 @@ void ProcessIndicator()
       if(fullRedraw || kept[k].live)
          DrawSwing(kept[k], cat, tf, drawColor, tfSecs, rates, rates_total);
 
-      if(fullRedraw && lifecycle)
+      if(fullRedraw && EnableABCD)
          MaybeAlert(kept[k], cat, tf, rates_total);
    }
 
