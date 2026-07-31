@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
-//|                                              ShinMim V1.12.mq5   |
+//|                                              ShinMim V1.13.mq5   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "1.12"
+#property version   "1.13"
 #property indicator_chart_window
 
 // این اندیکاتور فقط با آبجکت‌های گرافیکی کار می‌کند و هیچ بافری ندارد،
@@ -1215,12 +1215,19 @@ void DrawSwing(SwingAB &s, TFCategory cat, ENUM_TIMEFRAMES tf, color drawColor, 
    }
 
    // --- لیبل C
-   if(s.idxC >= 0 && (s.state == AB_RETRACED || s.state == AB_BROKEN))
+   // C در AB صعودی کف اصلاح است و در AB نزولی سقف آن. لیبل بیرون کندل قرار
+   // می‌گیرد تا رویش نیفتد: صعودی زیر کف کندل، نزولی بالای سقف کندل.
+   // priceC عمیق ترین بدنه است، ولی برای جای لیبل از سایه استفاده می‌شود تا
+   // متن کل کندل را رد کند.
+   if(s.idxC >= 0 && s.idxC < rates_total && (s.state == AB_RETRACED || s.state == AB_BROKEN))
    {
       string labelC = base + "_C";
+      double anchorPrice = s.isBull ? rates[s.idxC].low : rates[s.idxC].high;
+
       if(ObjectFind(0, labelC) >= 0) ObjectDelete(0, labelC);
-      ObjectCreate(0, labelC, OBJ_TEXT, 0, s.timeC, s.priceC);
+      ObjectCreate(0, labelC, OBJ_TEXT, 0, s.timeC, anchorPrice);
       ObjectSetInteger(0, labelC, OBJPROP_COLOR, LabelColor);
+      ObjectSetInteger(0, labelC, OBJPROP_ANCHOR, s.isBull ? ANCHOR_UPPER : ANCHOR_LOWER);
       ObjectSetString(0, labelC, OBJPROP_TEXT, "C");
    }
 
