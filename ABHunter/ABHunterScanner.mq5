@@ -17,7 +17,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "2.21"
+#property version   "2.22"
 #property indicator_chart_window
 
 #include "ABHunterCore.mqh"
@@ -50,6 +50,7 @@ input color  PanelTextColor    = clrGainsboro;
 input color  PanelBullColor    = clrDeepSkyBlue;
 input color  PanelBearColor    = clrOrange;
 input color  PanelBackColor    = clrBlack;
+input color  PanelBorderColor  = clrDimGray; // رنگ قاب جدول
 input int    PanelMaxRows      = 30;   // حداکثر ردیف نمایش داده شده
 
 //+------------------------------------------------------------------+
@@ -241,26 +242,36 @@ void DeletePanel()
    }
 }
 
-void PanelBackground(int rows)
+// کادر جدول باید قبل از لیبل ها ساخته شود.
+// در متاتریدر بین آبجکت هایی که BACK=false دارند، هر چه دیرتر ساخته شود
+// رویی تر رسم می‌شود؛ اگر کادر بعد از لیبل ها ساخته شود رویشان می‌افتد و
+// متن جدول دیده نمی‌شود.
+void EnsurePanelBackground()
+{
+   string name = objPrefix + "BG";
+   if(ObjectFind(0, name) >= 0) return;
+
+   ObjectCreate(0, name, OBJ_RECTANGLE_LABEL, 0, 0, 0);
+   ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+   ObjectSetInteger(0, name, OBJPROP_BORDER_TYPE, BORDER_FLAT);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+
+   // جلوی چارت رسم می‌شود تا کندل ها رویش نیفتند و جدول خوانا بماند
+   ObjectSetInteger(0, name, OBJPROP_BACK, false);
+}
+
+void SizePanelBackground(int rows)
 {
    string name = objPrefix + "BG";
    int height = rows * (PanelFontSize + 7) + 14;
    int width  = 320;
 
-   if(ObjectFind(0, name) < 0)
-   {
-      ObjectCreate(0, name, OBJ_RECTANGLE_LABEL, 0, 0, 0);
-      ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
-      ObjectSetInteger(0, name, OBJPROP_BORDER_TYPE, BORDER_FLAT);
-      ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
-      ObjectSetInteger(0, name, OBJPROP_BACK, true);
-   }
    ObjectSetInteger(0, name, OBJPROP_XDISTANCE, PanelX - 6);
    ObjectSetInteger(0, name, OBJPROP_YDISTANCE, PanelY - 6);
    ObjectSetInteger(0, name, OBJPROP_XSIZE, width);
    ObjectSetInteger(0, name, OBJPROP_YSIZE, height);
    ObjectSetInteger(0, name, OBJPROP_BGCOLOR, PanelBackColor);
-   ObjectSetInteger(0, name, OBJPROP_COLOR, PanelBackColor);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, PanelBorderColor);
 }
 
 void PanelRow(int row, string text, color clr)
@@ -303,6 +314,9 @@ void RunScan()
 {
    if(scanSymbolCount == 0) BuildSymbolList();
    BuildTFList();
+
+   // قبل از هر لیبلی، تا ترتیب رسم درست بماند
+   EnsurePanelBackground();
 
    ScanRow rows[];
    int nRows = 0;
@@ -424,7 +438,7 @@ void RunScan()
    ClearRowsFrom(row);
    drawnRows = row;
 
-   PanelBackground(row);
+   SizePanelBackground(row);
    ChartRedraw();
 
    firstScanDone = true;
