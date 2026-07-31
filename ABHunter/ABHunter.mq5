@@ -5,14 +5,14 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "2.10"
+#property version   "2.23"
 #property indicator_chart_window
+#property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
 // قواعد تشخیص و چرخه عمر مشترک با اسکنر
 #include "ABHunterCore.mqh"
 
-// این اندیکاتور فقط با آبجکت‌های گرافیکی کار می‌کند و هیچ بافری ندارد،
-// بنابراین indicator_buffers / indicator_plots تعریف نمی‌شود.
+// این اندیکاتور فقط با آبجکت‌های گرافیکی کار می‌کند و هیچ بافری ندارد.
 
 //---- تایم فریم های قابل تغییر با دکمه
 ENUM_TIMEFRAMES StructureTF;
