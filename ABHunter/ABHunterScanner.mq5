@@ -17,11 +17,18 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "2.23"
+#property version   "2.24"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
 #include "ABHunterCore.mqh"
+
+//---- گوشه ای که جدول در آن قرار می‌گیرد
+enum PanelCornerMode
+{
+   PANEL_TOP_LEFT,   // بالا چپ
+   PANEL_TOP_RIGHT   // بالا راست
+};
 
 //---- کدام وضعیت ها به حساب بیایند
 enum PanelFilterMode
@@ -43,8 +50,10 @@ input PanelFilterMode NotifyFilter = SHOW_FROM_COK; // برای کدام وضع�
 
 //---- جدول
 input PanelFilterMode PanelFilter = SHOW_ALL; // کدام وضعیت ها در جدول بیایند
-input int    PanelX            = 150;  // فاصله جدول از چپ
+input PanelCornerMode PanelCorner = PANEL_TOP_RIGHT; // جدول در کدام گوشه باشد
+input int    PanelX            = 70;   // فاصله جدول از لبه انتخاب شده
 input int    PanelY            = 20;   // فاصله جدول از بالا
+input int    PanelWidth        = 320;  // عرض جدول
 input int    PanelFontSize     = 9;
 input color  PanelTitleColor   = clrWhite;
 input color  PanelTextColor    = clrGainsboro;
@@ -52,7 +61,7 @@ input color  PanelBullColor    = clrDeepSkyBlue;
 input color  PanelBearColor    = clrOrange;
 input color  PanelBackColor    = clrBlack;
 input color  PanelBorderColor  = clrDimGray; // رنگ قاب جدول
-input int    PanelMaxRows      = 30;   // حداکثر ردیف نمایش داده شده
+input int    PanelMaxRows      = 100;  // سقف ردیف؛ به هر حال از ارتفاع چارت بیشتر نمی‌شود
 
 //+------------------------------------------------------------------+
 // یک ردیف جدول
@@ -79,6 +88,33 @@ bool     firstScanDone = false;   // اولین اسکن فقط ثبت می‌ک
 
 string   objPrefix;
 int      drawnRows = 0;
+int      panelLeft = 0;   // مختصات چپ جدول، هر اسکن دوباره حساب می‌شود
+
+//+------------------------------------------------------------------+
+// برای گوشه راست از CORNER_RIGHT_UPPER استفاده نمی‌کنیم، چون آن حالت جهت
+// انکر متن ها را برعکس می‌کند و ستون های هم عرض به هم می‌ریزند. به جایش
+// مختصات چپ را از عرض چارت حساب می‌کنیم و همه چیز از گوشه بالا چپ می‌ماند.
+int PanelLeftX()
+{
+   if(PanelCorner == PANEL_TOP_LEFT) return PanelX;
+
+   int chartW = (int)ChartGetInteger(0, CHART_WIDTH_IN_PIXELS);
+   int x = chartW - PanelWidth - PanelX;
+   if(x < 0) x = 0;
+   return x;
+}
+
+// چند ردیف در ارتفاع فعلی چارت جا می‌شود
+int MaxRowsThatFit()
+{
+   int chartH = (int)ChartGetInteger(0, CHART_HEIGHT_IN_PIXELS);
+   int rowH   = PanelFontSize + 7;
+   if(rowH <= 0) rowH = 16;
+
+   int fits = (chartH - PanelY - 24) / rowH;
+   if(fits < 5) fits = 5;
+   return fits;
+}
 
 //+------------------------------------------------------------------+
 // هر چه رتبه کمتر، الگو به معامله نزدیک تر. جدول با همین مرتب می‌شود تا
@@ -299,9 +335,9 @@ void SizePanelBackground(int rows)
 {
    string name = objPrefix + "BG";
    int height = rows * (PanelFontSize + 7) + 14;
-   int width  = 320;
+   int width  = PanelWidth;
 
-   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, PanelX - 6);
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, panelLeft - 6);
    ObjectSetInteger(0, name, OBJPROP_YDISTANCE, PanelY - 6);
    ObjectSetInteger(0, name, OBJPROP_XSIZE, width);
    ObjectSetInteger(0, name, OBJPROP_YSIZE, height);
@@ -321,7 +357,7 @@ void PanelRow(int row, string text, color clr)
       ObjectSetString(0, name, OBJPROP_FONT, "Consolas");
    }
 
-   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, PanelX);
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, panelLeft);
    ObjectSetInteger(0, name, OBJPROP_YDISTANCE, PanelY + row * (PanelFontSize + 7));
    ObjectSetInteger(0, name, OBJPROP_FONTSIZE, PanelFontSize);
    ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
@@ -349,6 +385,9 @@ void RunScan()
 {
    if(scanSymbolCount == 0) BuildSymbolList();
    BuildTFList();
+
+   // مختصات هر بار دوباره حساب می‌شود تا با تغییر اندازه چارت جابجا شود
+   panelLeft = PanelLeftX();
 
    // قبل از هر لیبلی، تا ترتیب رسم درست بماند
    EnsurePanelBackground();
@@ -426,6 +465,12 @@ void RunScan()
 
    // --- ردیف ها به ترتیب اهمیت. مرتب سازی انتخابی ساده کافی است چون فقط
    //     به تعداد PanelMaxRows بار اجرا می‌شود.
+   // سقف نمایش: هر چه کمتر باشد بین ورودی کاربر و آنچه در ارتفاع چارت جا می‌شود.
+   // سه ردیف برای سربرگ ها و خط «چند مورد دیگر» کنار گذاشته می‌شود.
+   int rowLimit = MaxRowsThatFit() - 3;
+   if(rowLimit > PanelMaxRows) rowLimit = PanelMaxRows;
+   if(rowLimit < 1) rowLimit = 1;
+
    int shown = 0;
    bool used[];
    if(nRows > 0)
@@ -434,7 +479,7 @@ void RunScan()
       for(int i = 0; i < nRows; i++) used[i] = false;
    }
 
-   while(shown < PanelMaxRows)
+   while(shown < rowLimit)
    {
       int best = -1;
       for(int i = 0; i < nRows; i++)
