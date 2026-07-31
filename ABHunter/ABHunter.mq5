@@ -1,15 +1,15 @@
 //+------------------------------------------------------------------+
-//|                                              ShinMim V2.00.mq5   |
+//|                                              ABHunter V2.10.mq5   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "2.00"
+#property version   "2.10"
 #property indicator_chart_window
 
 // قواعد تشخیص و چرخه عمر مشترک با اسکنر
-#include "ShinMimCore.mqh"
+#include "ABHunterCore.mqh"
 
 // این اندیکاتور فقط با آبجکت‌های گرافیکی کار می‌کند و هیچ بافری ندارد،
 // بنابراین indicator_buffers / indicator_plots تعریف نمی‌شود.
@@ -58,11 +58,6 @@ input color  CandleTimerColor     = clrGray;   // رنگ تایمر
 
 //+------------------------------------------------------------------+
 enum TFCategory { STRUCTURE, TRIGGER, ENTRY, NONE };
-
-// لیست تایم فریم های برای هر دکمه
-ENUM_TIMEFRAMES StructureTFList[9] = {PERIOD_D1, PERIOD_H12, PERIOD_H8, PERIOD_H6, PERIOD_H4, PERIOD_H3, PERIOD_H2, PERIOD_H1, PERIOD_M30};
-ENUM_TIMEFRAMES TriggerTFList[8]   = {PERIOD_H1, PERIOD_M30, PERIOD_M20, PERIOD_M15, PERIOD_M12, PERIOD_M10, PERIOD_M6, PERIOD_M5};
-ENUM_TIMEFRAMES EntryTFList[9]     = {PERIOD_M15, PERIOD_M12, PERIOD_M10, PERIOD_M6, PERIOD_M5, PERIOD_M4, PERIOD_M3, PERIOD_M2, PERIOD_M1};
 
 // اندیس فعلی در لیست ها
 int idxStructure = 3;   // H4
@@ -113,7 +108,7 @@ bool UsesLifecycle(TFCategory cat)
 // پیشوند نام آبجکت ها: <cat>_<tf>_
 string GetTFPrefix(TFCategory cat, ENUM_TIMEFRAMES tf)
 {
-   string catStr = (cat == STRUCTURE) ? "st_" : (cat == TRIGGER) ? "tr_" : (cat == ENTRY) ? "en_" : "xx_";
+   string catStr = (cat == STRUCTURE) ? "abhst_" : (cat == TRIGGER) ? "abhtr_" : (cat == ENTRY) ? "abhen_" : "abhxx_";
    return catStr + IntegerToString((int)tf) + "_";
 }
 
@@ -147,23 +142,6 @@ void DeleteLiveObjectsOfTF(TFCategory cat, ENUM_TIMEFRAMES tf)
    DeleteByPrefix(GetTFPrefix(cat, tf) + "L_");
 }
 
-// پاکسازی آبجکت های نسخه های قدیمی تر.
-// نام گذاری قبل از 1.06 شامل "_TF" بود و نام گذاری فعلی هرگز "_TF" تولید نمی‌کند.
-// نکته مهم: اینجا نباید همه آبجکت ها پاک شوند. متاتریدر با هر تغییر تایم فریم
-// چارت دوباره OnInit را صدا می‌زند و پاکسازی کامل، آبجکت های تایم فریم بالاتر را
-// که باید روی تایم فریم پایین تر باقی بمانند از بین می‌برد.
-void DeleteLegacyObjects()
-{
-   int total = ObjectsTotal(0);
-   for(int i = total - 1; i >= 0; i--)
-   {
-      string name = ObjectName(0, i);
-      bool isOurs = (StringFind(name, "st_") == 0 || StringFind(name, "tr_") == 0 || StringFind(name, "en_") == 0);
-      if(isOurs && StringFind(name, "_TF") >= 0)
-         ObjectDelete(0, name);
-   }
-}
-
 void CheckTFChangeAndDelete()
 {
    if(prevStructureTF != StructureTF)
@@ -195,9 +173,9 @@ void HighlightSelectedTF(TFCategory cat, int selectedIdx)
    string prefix;
    int count = 0;
 
-   if(cat == STRUCTURE)   { prefix = "ListSt_"; count = ArraySize(StructureTFList); }
-   else if(cat == TRIGGER){ prefix = "ListTr_"; count = ArraySize(TriggerTFList);   }
-   else if(cat == ENTRY)  { prefix = "ListEn_"; count = ArraySize(EntryTFList);     }
+   if(cat == STRUCTURE)   { prefix = "ABH_ListSt_"; count = ArraySize(StructureTFList); }
+   else if(cat == TRIGGER){ prefix = "ABH_ListTr_"; count = ArraySize(TriggerTFList);   }
+   else if(cat == ENTRY)  { prefix = "ABH_ListEn_"; count = ArraySize(EntryTFList);     }
    else return;
 
    for(int i = 0; i < count; i++)
@@ -220,7 +198,7 @@ void HighlightSelectedTF(TFCategory cat, int selectedIdx)
 
 string ListPrefix(TFCategory cat)
 {
-   return (cat == STRUCTURE) ? "ListSt_" : (cat == TRIGGER) ? "ListTr_" : "ListEn_";
+   return (cat == STRUCTURE) ? "ABH_ListSt_" : (cat == TRIGGER) ? "ABH_ListTr_" : "ABH_ListEn_";
 }
 
 void ShowTFList(TFCategory cat, int x, int y)
@@ -230,9 +208,9 @@ void ShowTFList(TFCategory cat, int x, int y)
    int count = 0;
    int selectedIdx = 0;
 
-   if(cat == STRUCTURE)    { prefix = "ListSt_"; count = ArraySize(StructureTFList); selectedIdx = idxStructure; }
-   else if(cat == TRIGGER) { prefix = "ListTr_"; count = ArraySize(TriggerTFList);   selectedIdx = idxTrigger;   }
-   else if(cat == ENTRY)   { prefix = "ListEn_"; count = ArraySize(EntryTFList);     selectedIdx = idxEntry;     }
+   if(cat == STRUCTURE)    { prefix = "ABH_ListSt_"; count = ArraySize(StructureTFList); selectedIdx = idxStructure; }
+   else if(cat == TRIGGER) { prefix = "ABH_ListTr_"; count = ArraySize(TriggerTFList);   selectedIdx = idxTrigger;   }
+   else if(cat == ENTRY)   { prefix = "ABH_ListEn_"; count = ArraySize(EntryTFList);     selectedIdx = idxEntry;     }
    else return;
 
    for(int i = 0; i < count; i++)
@@ -291,13 +269,6 @@ void SaveState()
    ObjectSetString(0, stateObjName, OBJPROP_TEXT, txt);
 }
 
-int ClampIdx(int idx, int size)
-{
-   if(idx < 0) return 0;
-   if(idx >= size) return size - 1;
-   return idx;
-}
-
 //+------------------------------------------------------------------+
 void CreateTFButton(string name, int x, int y, string text)
 {
@@ -325,7 +296,7 @@ static ulong lastObjectClickTime = 0;   // زمان آخرین کلیک پردا
 // هر ثانیه از OnTimer بروز می‌شود، پس روی هر تایم فریمی کار می‌کند.
 void UpdateCandleTimer()
 {
-   string name = "ShinMim_Timer_" + IntegerToString(ChartID());
+   string name = "ABH_Timer_" + IntegerToString(ChartID());
 
    if(!ShowCandleTimer)
    {
@@ -364,7 +335,7 @@ void UpdateCandleTimer()
 int OnInit()
 {
    string chartIDStr = IntegerToString(ChartID());
-   stateObjName = "ShinMim_State_" + chartIDStr;
+   stateObjName = StateObjectName(ChartID());
 
    if(ObjectFind(0, stateObjName) >= 0)
    {
@@ -395,12 +366,10 @@ int OnInit()
    prevTriggerTF   = TriggerTF;
    prevEntryTF     = EntryTF;
 
-   // فقط باقیمانده نسخه های قدیمی تر پاک می‌شود، نه همه آبجکت ها
-   DeleteLegacyObjects();
 
-   CreateTFButton("BtnStructure_" + chartIDStr, 10, 10, "STRUCT: " + TFToStr(StructureTF));
-   CreateTFButton("BtnTrigger_"   + chartIDStr, 10, 40, "TRIG: "   + TFToStr(TriggerTF));
-   CreateTFButton("BtnEntry_"     + chartIDStr, 10, 70, "ENTRY: "  + TFToStr(EntryTF));
+   CreateTFButton("ABH_BtnStructure_" + chartIDStr, 10, 10, "STRUCT: " + TFToStr(StructureTF));
+   CreateTFButton("ABH_BtnTrigger_"   + chartIDStr, 10, 40, "TRIG: "   + TFToStr(TriggerTF));
+   CreateTFButton("ABH_BtnEntry_"     + chartIDStr, 10, 70, "ENTRY: "  + TFToStr(EntryTF));
 
    lastBarTime      = 0;
    forceRedraw      = true;
@@ -427,19 +396,19 @@ void ChangeTF(string type, int idx)
    {
       idxStructure = ClampIdx(idx, ArraySize(StructureTFList));
       StructureTF = StructureTFList[idxStructure];
-      UpdateButton("BtnStructure_" + chartIDStr, "STRUCT: " + TFToStr(StructureTF));
+      UpdateButton("ABH_BtnStructure_" + chartIDStr, "STRUCT: " + TFToStr(StructureTF));
    }
    else if(type == "TRIG")
    {
       idxTrigger = ClampIdx(idx, ArraySize(TriggerTFList));
       TriggerTF = TriggerTFList[idxTrigger];
-      UpdateButton("BtnTrigger_" + chartIDStr, "TRIG: " + TFToStr(TriggerTF));
+      UpdateButton("ABH_BtnTrigger_" + chartIDStr, "TRIG: " + TFToStr(TriggerTF));
    }
    else if(type == "ENTRY")
    {
       idxEntry = ClampIdx(idx, ArraySize(EntryTFList));
       EntryTF = EntryTFList[idxEntry];
-      UpdateButton("BtnEntry_" + chartIDStr, "ENTRY: " + TFToStr(EntryTF));
+      UpdateButton("ABH_BtnEntry_" + chartIDStr, "ENTRY: " + TFToStr(EntryTF));
    }
 
    forceRedraw = true;
@@ -456,16 +425,16 @@ static TFCategory currentListCategory = NONE;
 void OnChartEvent(const int id, const long &lparam, const double &dparam, const string &sparam)
 {
    string chartIDStr    = IntegerToString(ChartID());
-   string btnStructName = "BtnStructure_" + chartIDStr;
-   string btnTrigName   = "BtnTrigger_"   + chartIDStr;
-   string btnEntryName  = "BtnEntry_"     + chartIDStr;
+   string btnStructName = "ABH_BtnStructure_" + chartIDStr;
+   string btnTrigName   = "ABH_BtnTrigger_"   + chartIDStr;
+   string btnEntryName  = "ABH_BtnEntry_"     + chartIDStr;
 
    if(id == CHARTEVENT_OBJECT_CLICK)
    {
       bool isOurObject = (sparam == btnStructName || sparam == btnTrigName || sparam == btnEntryName ||
-                          StringFind(sparam, "ListSt_") == 0 ||
-                          StringFind(sparam, "ListTr_") == 0 ||
-                          StringFind(sparam, "ListEn_") == 0);
+                          StringFind(sparam, "ABH_ListSt_") == 0 ||
+                          StringFind(sparam, "ABH_ListTr_") == 0 ||
+                          StringFind(sparam, "ABH_ListEn_") == 0);
       if(!isOurObject) return;
 
       ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
@@ -506,23 +475,23 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
          isTriggerListOpen   = false;
          currentListCategory = ENTRY;
       }
-      else if(StringFind(sparam, "ListSt_") == 0)
+      else if(StringFind(sparam, "ABH_ListSt_") == 0)
       {
-         ChangeTF("STRUCT", (int)StringToInteger(StringSubstr(sparam, StringLen("ListSt_"))));
+         ChangeTF("STRUCT", (int)StringToInteger(StringSubstr(sparam, StringLen("ABH_ListSt_"))));
          HideTFList(STRUCTURE);
          isStructureListOpen = false;
          currentListCategory = NONE;
       }
-      else if(StringFind(sparam, "ListTr_") == 0)
+      else if(StringFind(sparam, "ABH_ListTr_") == 0)
       {
-         ChangeTF("TRIG", (int)StringToInteger(StringSubstr(sparam, StringLen("ListTr_"))));
+         ChangeTF("TRIG", (int)StringToInteger(StringSubstr(sparam, StringLen("ABH_ListTr_"))));
          HideTFList(TRIGGER);
          isTriggerListOpen = false;
          currentListCategory = NONE;
       }
-      else if(StringFind(sparam, "ListEn_") == 0)
+      else if(StringFind(sparam, "ABH_ListEn_") == 0)
       {
-         ChangeTF("ENTRY", (int)StringToInteger(StringSubstr(sparam, StringLen("ListEn_"))));
+         ChangeTF("ENTRY", (int)StringToInteger(StringSubstr(sparam, StringLen("ABH_ListEn_"))));
          HideTFList(ENTRY);
          isEntryListOpen = false;
          currentListCategory = NONE;
@@ -561,7 +530,7 @@ void DeleteLowerTFObjects()
    {
       string name = ObjectName(0, i);
 
-      if(StringFind(name, "st_") == 0 || StringFind(name, "tr_") == 0 || StringFind(name, "en_") == 0)
+      if(StringFind(name, "abhst_") == 0 || StringFind(name, "abhtr_") == 0 || StringFind(name, "abhen_") == 0)
       {
          // فرمت نام: <cat>_<tf>_...  →  تایم فریم بین اولین و دومین آندرلاین است
          int p1 = StringFind(name, "_");
@@ -757,11 +726,11 @@ void MaybeAlert(SwingAB &s, TFCategory cat, ENUM_TIMEFRAMES tf, int rates_total)
    string tag = _Symbol + " " + TFToStr(tf) + " " + (s.isBull ? "BULL" : "BEAR");
 
    if(s.idxSignal == lastClosed)
-      Alert("ShinMim ", tag, ": سیگنال ورود");
+      Alert("ABHunter ", tag, ": سیگنال ورود");
    else if(s.hasValidBreak && s.idxBreakTo == lastClosed)
-      Alert("ShinMim ", tag, ": شکست سطح B - برو تایم پایین تر");
+      Alert("ABHunter ", tag, ": شکست سطح B - برو تایم پایین تر");
    else if(s.state == AB_RETRACED && s.idxC == lastClosed)
-      Alert("ShinMim ", tag, ": اصلاح معتبر شد (C)");
+      Alert("ABHunter ", tag, ": اصلاح معتبر شد (C)");
 }
 
 //+------------------------------------------------------------------+
@@ -783,7 +752,7 @@ void ProcessIndicator()
    datetime curBar = iTime(_Symbol, _Period, 0);
    if(curBar == 0) return;
 
-   // تشخیص، چرخه عمر و فیلترها همگی در ShinMimCore انجام می‌شوند تا اندیکاتور
+   // تشخیص، چرخه عمر و فیلترها همگی در ABHunterCore انجام می‌شوند تا اندیکاتور
    // و اسکنر دقیقا یک منطق داشته باشند. اینجا فقط رسم می‌ماند.
    MqlRates rates[];
    int rates_total = 0;
@@ -869,17 +838,17 @@ void OnDeinit(const int reason)
       {
          string name = ObjectName(0, i);
 
-         if(StringFind(name, "st_") == 0 ||
-            StringFind(name, "tr_") == 0 ||
-            StringFind(name, "en_") == 0 ||
-            StringFind(name, "ListSt_") == 0 ||
-            StringFind(name, "ListTr_") == 0 ||
-            StringFind(name, "ListEn_") == 0 ||
-            StringFind(name, "BtnStructure_") == 0 ||
-            StringFind(name, "BtnTrigger_") == 0 ||
-            StringFind(name, "BtnEntry_") == 0 ||
-            StringFind(name, "ShinMim_State_") == 0 ||
-            StringFind(name, "ShinMim_Timer_") == 0)
+         if(StringFind(name, "abhst_") == 0 ||
+            StringFind(name, "abhtr_") == 0 ||
+            StringFind(name, "abhen_") == 0 ||
+            StringFind(name, "ABH_ListSt_") == 0 ||
+            StringFind(name, "ABH_ListTr_") == 0 ||
+            StringFind(name, "ABH_ListEn_") == 0 ||
+            StringFind(name, "ABH_BtnStructure_") == 0 ||
+            StringFind(name, "ABH_BtnTrigger_") == 0 ||
+            StringFind(name, "ABH_BtnEntry_") == 0 ||
+            StringFind(name, "ABH_State_") == 0 ||
+            StringFind(name, "ABH_Timer_") == 0)
          {
             ObjectDelete(0, name);
          }

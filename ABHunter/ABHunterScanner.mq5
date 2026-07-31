@@ -1,26 +1,27 @@
 //+------------------------------------------------------------------+
-//|                                             ShinMimScanner.mq5   |
+//|                                             ABHunterScanner.mq5   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
-//| اسکنر چند نمادی ShinMim.                                          |
+//| اسکنر چند نمادی ABHunter.                                          |
 //| روی یک چارت نصب می‌شود و همه نمادهای انتخابی را در سه تایم فریم    |
 //| اسکن می‌کند، جدول الگوهای فعال را نشان می‌دهد و برای هر AB جدیدی   |
 //| که قطعی شود نوتیفیکیشن موبایل می‌فرستد.                            |
 //|                                                                  |
-//| قواعد تشخیص از ShinMimCore.mqh می‌آید — همان فایلی که اندیکاتور    |
+//| قواعد تشخیص از ABHunterCore.mqh می‌آید — همان فایلی که اندیکاتور    |
 //| چارت هم استفاده می‌کند، تا دو نسخه از منطق وجود نداشته باشد.       |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "1.00"
+#property version   "2.10"
 #property indicator_chart_window
 
-#include "ShinMimCore.mqh"
+#include "ABHunterCore.mqh"
 
 //---- دامنه اسکن
 input string ScanSymbols       = "";        // نمادها با کاما؛ خالی یعنی همه Market Watch
-input ENUM_TIMEFRAMES ScanTF1  = PERIOD_H4; // تایم فریم ساختار
+input bool   SyncTFWithChart   = true;      // خواندن تایم فریم ها از چارتی که اندیکاتور رویش نصب است
+input ENUM_TIMEFRAMES ScanTF1  = PERIOD_H4; // تایم فریم ساختار (وقتی هماهنگی خاموش یا ناموفق است)
 input ENUM_TIMEFRAMES ScanTF2  = PERIOD_M20;// تایم فریم تریگر
 input ENUM_TIMEFRAMES ScanTF3  = PERIOD_M1; // تایم فریم ورود
 input int    RefreshSeconds    = 30;        // فاصله هر اسکن (ثانیه)
@@ -53,12 +54,63 @@ bool     firstScanDone = false; // اولین اسکن فقط ثبت می‌کن
 string   objPrefix;             // پیشوند آبجکت های این چارت
 int      drawnRows = 0;
 
+ENUM_TIMEFRAMES activeTF[3];    // تایم فریم های همین اسکن
+string   tfSource = "";         // از کجا آمده اند، برای سربرگ جدول
+
 //+------------------------------------------------------------------+
 ENUM_TIMEFRAMES ScanTF(int slot)
 {
-   if(slot == 0) return ScanTF1;
-   if(slot == 1) return ScanTF2;
-   return ScanTF3;
+   return activeTF[slot];
+}
+
+//+------------------------------------------------------------------+
+// خواندن تایم فریم ها از چارتی که اندیکاتور ABHunter رویش نصب است.
+// اندیکاتور انتخاب سه دکمه را در آبجکت ABH_State_<chartID> نگه می‌دارد، پس
+// کافیست چارت های باز را بگردیم و اولین چارتی که چنین آبجکتی دارد را بخوانیم.
+// اینطوری هر بار با دکمه ها تایم فریم را عوض کنید، اسکن بعدی همان را می‌گیرد.
+bool ReadTFsFromChart()
+{
+   long id = ChartFirst();
+
+   while(id >= 0)
+   {
+      string obj = StateObjectName(id);
+
+      if(ObjectFind(id, obj) >= 0)
+      {
+         string txt = ObjectGetString(id, obj, OBJPROP_TEXT);
+         int p1 = StringFind(txt, "|");
+         int p2 = (p1 >= 0) ? StringFind(txt, "|", p1 + 1) : -1;
+
+         if(p1 >= 0 && p2 > p1)
+         {
+            int i1 = ClampIdx((int)StringToInteger(StringSubstr(txt, 0, p1)), ArraySize(StructureTFList));
+            int i2 = ClampIdx((int)StringToInteger(StringSubstr(txt, p1 + 1, p2 - (p1 + 1))), ArraySize(TriggerTFList));
+            int i3 = ClampIdx((int)StringToInteger(StringSubstr(txt, p2 + 1)), ArraySize(EntryTFList));
+
+            activeTF[0] = StructureTFList[i1];
+            activeTF[1] = TriggerTFList[i2];
+            activeTF[2] = EntryTFList[i3];
+            tfSource    = ChartSymbol(id);
+            return true;
+         }
+      }
+
+      id = ChartNext(id);
+   }
+
+   return false;
+}
+
+// تایم فریم های این اسکن را تعیین می‌کند: اول از چارت، وگرنه از ورودی ها
+void ResolveTFs()
+{
+   if(SyncTFWithChart && ReadTFsFromChart()) return;
+
+   activeTF[0] = ScanTF1;
+   activeTF[1] = ScanTF2;
+   activeTF[2] = ScanTF3;
+   tfSource    = SyncTFWithChart ? "inputs (no chart)" : "inputs";
 }
 
 bool NotifyForSlot(int slot)
@@ -221,7 +273,12 @@ void RunScan()
 {
    if(scanSymbolCount == 0) BuildSymbolList();
 
+   ResolveTFs();
+
    int row = 0;
+   PanelRow(row, "TF: " + TFToStr(activeTF[0]) + " / " + TFToStr(activeTF[1]) +
+                 " / " + TFToStr(activeTF[2]) + "   <- " + tfSource, PanelTitleColor);
+   row++;
    PanelRow(row, PadRight("SYMBOL", 12) + PadRight("TF", 5) + PadRight("DIR", 5) + "STATE", PanelTitleColor);
    row++;
 
@@ -267,14 +324,14 @@ void RunScan()
                // از الگوهای قدیمی روبرو می‌شوید
                if(firstScanDone && EnablePush && NotifyForSlot(slot))
                {
-                  SendNotification("ShinMim " + sym + " " + TFToStr(tf) + " " +
+                  SendNotification("ABHunter " + sym + " " + TFToStr(tf) + " " +
                                    (active[k].isBull ? "BULL" : "BEAR") +
                                    " AB " + StateText(active[k]));
                }
             }
 
             // --- ردیف جدول
-            if(row - 1 < PanelMaxRows)
+            if(row - 2 < PanelMaxRows)
             {
                string line = PadRight(sym, 12) +
                              PadRight(TFToStr(tf), 5) +
@@ -305,7 +362,7 @@ void RunScan()
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   objPrefix = "ShinMimScan_" + IntegerToString(ChartID()) + "_";
+   objPrefix = "ABHScan_" + IntegerToString(ChartID()) + "_";
 
    ArrayResize(notifiedKeys, 256);
    notifiedCount = 0;
@@ -313,6 +370,7 @@ int OnInit()
    drawnRows     = 0;
 
    BuildSymbolList();
+   ResolveTFs();
 
    int period = RefreshSeconds;
    if(period < 5) period = 5;

@@ -1,8 +1,8 @@
 //+------------------------------------------------------------------+
-//|                                                ShinMimCore.mqh   |
+//|                                                ABHunterCore.mqh   |
 //|                                                                  |
 //| منطق مشترک تشخیص سویینگ و چرخه عمر الگوی ABCD.                   |
-//| هم ShinMim.mq5 (اندیکاتور چارت) و هم ShinMimScanner.mq5           |
+//| هم ABHunter.mq5 (اندیکاتور چارت) و هم ABHunterScanner.mq5           |
 //| (اسکنر چند نمادی) این فایل را include می‌کنند تا قواعد تشخیص      |
 //| یک منبع واحد داشته باشند و بین دو فایل واگرا نشوند.               |
 //+------------------------------------------------------------------+
@@ -36,6 +36,27 @@ input double BreakMaxWickPercent  = 5.0;   // حداکثر درصد سایه ه�
 input double BreakMinSizeRatio    = 1.0;   // حداقل اندازه کندل شکست نسبت به میانگین رنج
 input double BreakMinDistancePct  = 10.0;  // حداقل فاصله اوپن و کلوز از سطح B (درصد از AB)
 input int    BreakMaxCandles      = 3;     // ترکیب حداکثر چند کندل به عنوان یک کندل شکست
+
+//+------------------------------------------------------------------+
+// لیست تایم فریم های هر دکمه. اینجا هستند تا اسکنر بتواند اندیس ذخیره شده
+// روی چارت را دقیقا مثل خود اندیکاتور به تایم فریم تبدیل کند.
+ENUM_TIMEFRAMES StructureTFList[9] = {PERIOD_D1, PERIOD_H12, PERIOD_H8, PERIOD_H6, PERIOD_H4, PERIOD_H3, PERIOD_H2, PERIOD_H1, PERIOD_M30};
+ENUM_TIMEFRAMES TriggerTFList[8]   = {PERIOD_H1, PERIOD_M30, PERIOD_M20, PERIOD_M15, PERIOD_M12, PERIOD_M10, PERIOD_M6, PERIOD_M5};
+ENUM_TIMEFRAMES EntryTFList[9]     = {PERIOD_M15, PERIOD_M12, PERIOD_M10, PERIOD_M6, PERIOD_M5, PERIOD_M4, PERIOD_M3, PERIOD_M2, PERIOD_M1};
+
+// نام آبجکت مخفی که اندیکاتور انتخاب سه دکمه را در آن ذخیره می‌کند.
+// اسکنر همین نام را روی چارت های باز می‌گردد تا تایم فریم ها را بخواند.
+string StateObjectName(long chartId)
+{
+   return "ABH_State_" + IntegerToString(chartId);
+}
+
+int ClampIdx(int idx, int size)
+{
+   if(idx < 0) return 0;
+   if(idx >= size) return size - 1;
+   return idx;
+}
 
 //+------------------------------------------------------------------+
 // وضعیت الگو در چرخه عمر
