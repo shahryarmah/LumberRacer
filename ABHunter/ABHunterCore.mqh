@@ -190,9 +190,18 @@ int CollectSwings(MqlRates &rates[], int rates_total, int scanFrom, SwingAB &out
             double candleSize = rates[idx].high - rates[idx].low;
             double bodyPercent = (candleSize == 0) ? 0 : (body / candleSize) * 100.0;
 
-            if(bodyPercent < MinBodyPercent) nonStd++;
-            if(rates[idx].close > rates[idx].open) bullCount++;
-            if(rates[idx].close < rates[idx].open) bearCount++;
+            // کندل بدنه کوچک «جهت» ندارد و نباید جای یک کندل هم جهت واقعی را
+            // بگیرد، وگرنه شرط «حداقل MinCandles کندل هم جهت» با کندل های
+            // بی بدنه پر می‌شود.
+            if(bodyPercent < MinBodyPercent)
+            {
+               nonStd++;
+            }
+            else
+            {
+               if(rates[idx].close > rates[idx].open) bullCount++;
+               if(rates[idx].close < rates[idx].open) bearCount++;
+            }
          }
 
          if(nonStd > MaxNonStandard) continue;
@@ -264,16 +273,34 @@ int CollectSwings(MqlRates &rates[], int rates_total, int scanFrom, SwingAB &out
          int abBull = 0, abBear = 0, abNonStd = 0;
          int abTotal = idxB - idxA + 1;
 
+         // علاوه بر تعداد، حجم بدنه هم شمرده می‌شود: یک کندل مخالف بزرگ حتی
+         // اگر «فقط یکی» باشد ایمپالس را از بین می‌برد.
+         double sameBody = 0.0, oppBody = 0.0;
+
          for(int m = idxA; m <= idxB; m++)
          {
             double abBody  = MathAbs(rates[m].close - rates[m].open);
             double abRange = rates[m].high - rates[m].low;
             double abPct   = (abRange == 0) ? 0 : (abBody / abRange) * 100.0;
 
-            if(abPct < MinBodyPercent) abNonStd++;
-            if(rates[m].close > rates[m].open) abBull++;
-            if(rates[m].close < rates[m].open) abBear++;
+            if(abPct < MinBodyPercent)
+            {
+               abNonStd++;
+               continue;               // کندل بی بدنه نه هم جهت است نه مخالف
+            }
+
+            bool up = (rates[m].close > rates[m].open);
+            bool dn = (rates[m].close < rates[m].open);
+
+            if(up) abBull++;
+            if(dn) abBear++;
+
+            if(isBullish) { if(up) sameBody += abBody; else if(dn) oppBody += abBody; }
+            else          { if(dn) sameBody += abBody; else if(up) oppBody += abBody; }
          }
+
+         if(sameBody <= 0.0) continue;
+         if(oppBody > sameBody * AbOppositePercent / 100.0) continue;
 
          // سهم مجاز نسبی است، ولی هیچ وقت کمتر از عدد ثابت ورودی نمی‌شود.
          double abShare = abTotal * AbOppositePercent / 100.0;
