@@ -18,6 +18,12 @@ input int    MaxNonStandard       = 1;
 input double MinABRatio           = 1.0;
 input double MaxABRatio           = 8.0;
 
+//---- تحمل کندل مخالف در محدوده AB
+// عدد ثابت MaxOppositeCandles برای پنجره کوتاه تشخیص خوب است، ولی محدوده
+// [idxA, idxB] می‌تواند خیلی بلندتر باشد و آنجا عدد ثابت هر ایمپالس چند کندلی
+// که یکی دو پولبک کوچک دارد را رد می‌کند. پس سهم مجاز نسبی است.
+input double AbOppositePercent    = 30.0;  // درصد مجاز کندل مخالف در محدوده AB
+
 //---- مومنتم سویینگ
 input double MomentumMinPercent   = 60.0;  // حداقل درصد AB که باید با بدنه پوشیده شود
 input int    MaxNonProgressive    = 1;     // چند کندل مجاز است سقف بالاتر از کندل قبل نسازد
@@ -28,6 +34,7 @@ input int    ABCDHistoryBars      = 300;   // تعداد کندل تاریخچه
 input double RetraceMinPercent    = 20.0;  // حداقل درصد اصلاح از AB
 input double RetraceMaxPercent    = 60.0;  // حداکثر درصد اصلاح (با بادی)
 input int    MinRetraceCandles    = 3;     // حداقل کندل اصلاح، از کندل بعد از B
+input int    MaxPatternDays       = 1;     // الگو حداکثر چند روز معتبر بماند (0 = بی نهایت)
 input bool   HideCounterABInRetrace = true; // پنهان کردن AB خلاف جهت که خودش اصلاح الگوی بزرگتر است
 
 //---- کندل شکست
@@ -255,6 +262,7 @@ int CollectSwings(MqlRates &rates[], int rates_total, int scanFrom, SwingAB &out
          // تضمین نمی‌شود و مثلا 2 کندل صعودی با یک کندل مخالف قبول می‌شد،
          // چون شرط قبلی فقط تعداد میله را می‌شمرد نه کندل های هم جهت را.
          int abBull = 0, abBear = 0, abNonStd = 0;
+         int abTotal = idxB - idxA + 1;
 
          for(int m = idxA; m <= idxB; m++)
          {
@@ -267,15 +275,20 @@ int CollectSwings(MqlRates &rates[], int rates_total, int scanFrom, SwingAB &out
             if(rates[m].close < rates[m].open) abBear++;
          }
 
-         if(abNonStd > MaxNonStandard) continue;
+         // سهم مجاز نسبی است، ولی هیچ وقت کمتر از عدد ثابت ورودی نمی‌شود.
+         double abShare = abTotal * AbOppositePercent / 100.0;
+         int maxOpp     = (int)MathMax((double)MaxOppositeCandles, abShare);
+         int maxNonStd  = (int)MathMax((double)MaxNonStandard,     abShare);
+
+         if(abNonStd > maxNonStd) continue;
 
          if(isBullish)
          {
-            if(abBull < MinCandles || abBear > MaxOppositeCandles) continue;
+            if(abBull < MinCandles || abBear > maxOpp) continue;
          }
          else
          {
-            if(abBear < MinCandles || abBull > MaxOppositeCandles) continue;
+            if(abBear < MinCandles || abBull > maxOpp) continue;
          }
 
          // جلوگیری از AB تو در تو
@@ -299,7 +312,7 @@ int CollectSwings(MqlRates &rates[], int rates_total, int scanFrom, SwingAB &out
                                         : (rates[m].low  < rates[m-1].low);
             if(!progressed) nonProgressive++;
          }
-         if(nonProgressive > MaxNonProgressive) continue;
+         if(nonProgressive > (int)MathMax((double)MaxNonProgressive, abShare)) continue;
 
          // --- مومنتم 2: گستره بدنه ها باید بخش عمده طول AB را بپوشاند
          double bodyLo = MathMin(rates[idxA].open, rates[idxA].close);
@@ -421,13 +434,34 @@ void EvaluateLifecycle(SwingAB &s, MqlRates &rates[], int rates_total, double av
       return;
    }
 
+   // اعتبار زمانی: الگو فقط در همان روزی که تشکیل شده معتبر است. بدون این
+   // شرط، الگویی که اصلاحش ده برابر خود ایمپالس طول کشیده هنوز زنده می‌ماند
+   // و جدول اسکنر پر از الگوهای کهنه می‌شود.
+   if(MaxPatternDays > 0 && rates_total > 0)
+   {
+      long dayB   = (long)s.timeB / 86400;
+      long dayNow = (long)rates[rates_total - 1].time / 86400;
+
+      if(dayNow - dayB >= MaxPatternDays)
+      {
+         s.state = AB_INVALID;
+         return;
+      }
+   }
+
    s.state = AB_WAIT_RETRACE;
 
    double dir      = s.isBull ? -1.0 : 1.0;   // اصلاح AB صعودی، نزولی است
    double levelMin = s.priceB + dir * s.size * RetraceMinPercent / 100.0;
    double levelMax = s.priceB + dir * s.size * RetraceMaxPercent / 100.0;
 
-   double deepest = s.priceB;
+   // دو عمق جدا نگه داشته می‌شود:
+   //   deepestBody برای آستانه های 20 و 60 درصد، چون کاربر گفت اصلاح باید با
+   //   بدنه سنجیده شود نه سایه.
+   //   deepestWick برای جای خود نقطه C و محاسبه CD، چون C از نظر بصری همان
+   //   کف/سقف واقعی اصلاح است نه انتهای بدنه.
+   double deepestBody = s.priceB;
+   double deepestWick = s.priceB;
 
    // فقط کندل های بسته شده بررسی می‌شوند تا وضعیت وسط کندل repaint نشود.
    for(int m = s.idxB + 1; m <= rates_total - 2; m++)
@@ -435,17 +469,19 @@ void EvaluateLifecycle(SwingAB &s, MqlRates &rates[], int rates_total, double av
       // ردیابی اصلاح تا لحظه شکست B ادامه دارد، نه فقط تا وقتی معتبر شود.
       if(s.state == AB_WAIT_RETRACE || s.state == AB_RETRACED)
       {
-         // عمق اصلاح با بادی سنجیده می‌شود نه با سایه — هم حداقل و هم حداکثر.
          double bodyExt = s.isBull ? MathMin(rates[m].open, rates[m].close)
                                    : MathMax(rates[m].open, rates[m].close);
+         double wickExt = s.isBull ? rates[m].low : rates[m].high;
 
-         bool deeper = s.isBull ? (bodyExt < deepest) : (bodyExt > deepest);
-         if(deeper)
+         if(s.isBull ? (bodyExt < deepestBody) : (bodyExt > deepestBody))
+            deepestBody = bodyExt;
+
+         if(s.isBull ? (wickExt < deepestWick) : (wickExt > deepestWick))
          {
-            deepest  = bodyExt;
-            s.idxC   = m;
-            s.timeC  = rates[m].time;
-            s.priceC = bodyExt;
+            deepestWick = wickExt;
+            s.idxC      = m;
+            s.timeC     = rates[m].time;
+            s.priceC    = wickExt;
          }
 
          bool bodyBeyondMax = s.isBull ? (bodyExt < levelMax) : (bodyExt > levelMax);
@@ -457,7 +493,7 @@ void EvaluateLifecycle(SwingAB &s, MqlRates &rates[], int rates_total, double av
 
          if(s.state == AB_WAIT_RETRACE)
          {
-            bool retraceDeepEnough = s.isBull ? (deepest <= levelMin) : (deepest >= levelMin);
+            bool retraceDeepEnough = s.isBull ? (deepestBody <= levelMin) : (deepestBody >= levelMin);
 
             // «حداقل 3 کندل اصلاح» یعنی خود نقطه C حداقل 3 کندل بعد از B باشد،
             // نه اینکه فقط 3 کندل از B گذشته باشد.

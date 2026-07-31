@@ -17,7 +17,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "2.30"
+#property version   "2.40"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
@@ -42,6 +42,7 @@ enum PanelFilterMode
 
 //---- دامنه اسکن
 input string ScanSymbols       = "XAUUSD,DJIUSD,BRNUSD,SPXUSD,NDXUSD,NZDJPY,USDCAD,USDCHF,USDJPY,GBPCHF,GBPJPY,GBPNZD,GBPUSD,EURJPY,EURNZD,EURUSD,GBPAUD,GBPCAD,CHFJPY,EURAUD,EURCAD,EURCHF,EURGBP,AUDCAD,AUDJPY,AUDUSD,CADCHF,CADJPY"; // نمادها با کاما؛ خالی یعنی همه Market Watch
+input bool   ScanAllMarketWatch = false; // اگر ScanSymbols خالی بود، همه Market Watch اسکن شود
 input string ScanTimeframes    = "H4,H3,H2,H1,M30,M20,M15"; // تایم فریم ها با کاما
 input bool   SyncTFWithChart   = false;// به جای فهرست بالا، سه تایم فریم دکمه های چارت خوانده شود
 input int    RefreshSeconds    = 60;   // فاصله هر اسکن (ثانیه)
@@ -55,7 +56,8 @@ input PanelFilterMode PanelFilter = FILTER_PRE_HUNT; // کدام وضعیت ها
 input PanelCornerMode PanelCorner = PANEL_TOP_RIGHT; // جدول در کدام گوشه باشد
 input int    PanelX            = 70;   // فاصله جدول از لبه انتخاب شده
 input int    PanelY            = 20;   // فاصله جدول از بالا
-input int    PanelWidth        = 320;  // عرض جدول
+input int    PanelWidth        = 400;  // عرض جدول
+input int    NewMarkMinutes    = 45;   // الگوی تازه تا چند دقیقه با * علامت بخورد
 input int    PanelFontSize     = 9;
 input color  PanelTitleColor   = clrWhite;
 input color  PanelTextColor    = clrGainsboro;
@@ -75,6 +77,8 @@ struct ScanRow
    ABState         state;
    bool            hasBreak;
    int             rank;    // هر چه کمتر، مهم تر
+   bool            isNew;   // تازه به لیست اضافه شده
+   string          posMark; // معامله باز روی این نماد
 };
 
 string   scanSymbolList[];
@@ -84,8 +88,11 @@ ENUM_TIMEFRAMES scanTFList[];
 int      scanTFCount = 0;
 string   tfSource = "";
 
-string   notifiedKeys[];
-int      notifiedCount = 0;
+// هر الگو یک بار ثبت می‌شود: هم برای اینکه دوبار نوتیفیکیشن نرود، هم برای
+// اینکه بدانیم چه زمانی اولین بار دیده شده و تا مدتی با * علامت بخورد.
+string   seenKeys[];
+datetime seenFirst[];
+int      seenCount = 0;
 bool     firstScanDone = false;   // اولین اسکن فقط ثبت می‌کند و اطلاع نمی‌دهد
 
 string   objPrefix;
@@ -150,6 +157,11 @@ void BuildSymbolList()
 
    if(StringLen(trimmed) == 0)
    {
+      // بدون تایید صریح، لیست خالی به معنی «همه Market Watch» نیست. اینطور
+      // اگر مقدار ورودی جا نیفتاده باشد، جدول بی سروصدا پر از نمادهای ناخواسته
+      // نمی‌شود؛ به جایش سربرگ می‌گوید چه شده.
+      if(!ScanAllMarketWatch) return;
+
       int total = SymbolsTotal(true);          // فقط Market Watch
       ArrayResize(scanSymbolList, total);
       for(int i = 0; i < total; i++)
@@ -279,29 +291,56 @@ void BuildTFList()
 }
 
 //+------------------------------------------------------------------+
-bool AlreadyNotified(string key)
+int SeenIndex(string key)
 {
-   for(int i = 0; i < notifiedCount; i++)
-      if(notifiedKeys[i] == key) return true;
-   return false;
+   for(int i = 0; i < seenCount; i++)
+      if(seenKeys[i] == key) return i;
+   return -1;
 }
 
-void RememberNotified(string key)
+int RememberSeen(string key)
 {
    // فهرست بی نهایت رشد نکند: نصف قدیمی ها دور ریخته می‌شود
-   if(notifiedCount >= 6000)
+   if(seenCount >= 6000)
    {
-      int keep = notifiedCount / 2;
+      int keep = seenCount / 2;
       for(int i = 0; i < keep; i++)
-         notifiedKeys[i] = notifiedKeys[notifiedCount - keep + i];
-      notifiedCount = keep;
+      {
+         seenKeys[i]  = seenKeys[seenCount - keep + i];
+         seenFirst[i] = seenFirst[seenCount - keep + i];
+      }
+      seenCount = keep;
    }
 
-   if(notifiedCount >= ArraySize(notifiedKeys))
-      ArrayResize(notifiedKeys, notifiedCount + 512);
+   if(seenCount >= ArraySize(seenKeys))
+   {
+      ArrayResize(seenKeys,  seenCount + 512);
+      ArrayResize(seenFirst, seenCount + 512);
+   }
 
-   notifiedKeys[notifiedCount] = key;
-   notifiedCount++;
+   seenKeys[seenCount]  = key;
+   seenFirst[seenCount] = TimeCurrent();
+   seenCount++;
+   return seenCount - 1;
+}
+
+// آیا روی این نماد معامله بازی هست؟
+string PositionMark(string sym)
+{
+   bool hasBuy = false, hasSell = false;
+   int total = PositionsTotal();
+
+   for(int i = 0; i < total; i++)
+   {
+      if(PositionGetSymbol(i) != sym) continue;
+      if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) hasBuy = true;
+      else                                                       hasSell = true;
+   }
+
+   if(hasBuy && hasSell) return "B+S";
+   if(hasBuy)  return "BUY";
+   if(hasSell) return "SELL";
+   return "";
 }
 
 //+------------------------------------------------------------------+
@@ -424,13 +463,14 @@ void RunScan()
 
             int rank = StateRank(active[k]);
 
-            // --- نوتیفیکیشن برای هر AB جدیدی که قطعی شده
             string key = sym + "|" + IntegerToString((int)tf) + "|" +
                          IntegerToString((long)active[k].timeA);
 
-            if(!AlreadyNotified(key))
+            int si = SeenIndex(key);
+
+            if(si < 0)
             {
-               RememberNotified(key);
+               si = RememberSeen(key);
 
                // اولین اسکن فقط ثبت می‌کند، وگرنه لحظه نصب با انبوه
                // اطلاع رسانی از الگوهای قدیمی روبرو می‌شوید
@@ -452,6 +492,9 @@ void RunScan()
             rows[nRows].state    = active[k].state;
             rows[nRows].hasBreak = active[k].hasValidBreak;
             rows[nRows].rank     = rank;
+            rows[nRows].isNew    = (NewMarkMinutes > 0 &&
+                                    (TimeCurrent() - seenFirst[si]) <= NewMarkMinutes * 60);
+            rows[nRows].posMark  = PositionMark(sym);
             nRows++;
          }
       }
@@ -462,7 +505,8 @@ void RunScan()
    PanelRow(row, "ABHunter  " + IntegerToString(scanSymbolCount) + " sym x " +
                  IntegerToString(scanTFCount) + " tf  <- " + tfSource, PanelTitleColor);
    row++;
-   PanelRow(row, PadRight("SYMBOL", 12) + PadRight("TF", 5) + PadRight("DIR", 5) + "STATE",
+   PanelRow(row, PadRight("SYMBOL", 11) + PadRight("TF", 5) + PadRight("DIR", 5) +
+                 PadRight("STATE", 7) + PadRight("NEW", 5) + "POS",
             PanelTitleColor);
    row++;
 
@@ -499,15 +543,24 @@ void RunScan()
                       ? (rows[best].hasBreak ? "BREAK" : "HUNT")
                       : (rows[best].state == AB_RETRACED ? "C ok" : "WAIT");
 
-      PanelRow(row, PadRight(rows[best].symbol, 12) +
+      PanelRow(row, PadRight(rows[best].symbol, 11) +
                     PadRight(TFToStr(rows[best].tf), 5) +
-                    PadRight(dir, 5) + st,
+                    PadRight(dir, 5) +
+                    PadRight(st, 7) +
+                    PadRight(rows[best].isNew ? "*" : "", 5) +
+                    rows[best].posMark,
                rows[best].isBull ? PanelBullColor : PanelBearColor);
       row++;
       shown++;
    }
 
-   if(nRows == 0)
+   if(scanSymbolCount == 0)
+   {
+      PanelRow(row, "ScanSymbols is empty - set it, or enable ScanAllMarketWatch",
+               PanelTextColor);
+      row++;
+   }
+   else if(nRows == 0)
    {
       PanelRow(row, "(no active pattern)", PanelTextColor);
       row++;
@@ -532,8 +585,9 @@ int OnInit()
 {
    objPrefix = "ABHScan_" + IntegerToString(ChartID()) + "_";
 
-   ArrayResize(notifiedKeys, 512);
-   notifiedCount = 0;
+   ArrayResize(seenKeys,  512);
+   ArrayResize(seenFirst, 512);
+   seenCount = 0;
    firstScanDone = false;
    drawnRows     = 0;
 
