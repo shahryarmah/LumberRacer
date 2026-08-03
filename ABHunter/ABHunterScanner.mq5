@@ -1,4 +1,4 @@
-﻿//+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
 //|                                            ABHunterScanner.mq5   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
@@ -17,7 +17,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "2.43"
+#property version   "2.50"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
@@ -45,7 +45,7 @@ input string ScanSymbols       = "XAUUSD,DJIUSD,BRNUSD,SPXUSD,NDXUSD,NZDJPY,USDC
 input bool   ScanAllMarketWatch = false; // اگر ScanSymbols خالی بود، همه Market Watch اسکن شود
 input string ScanTimeframes    = "H4,H3,H2,H1,M30,M20,M15"; // تایم فریم ها با کاما
 input bool   SyncTFWithChart   = false;// به جای فهرست بالا، سه تایم فریم دکمه های چارت خوانده شود
-input int    RefreshSeconds    = 60;   // فاصله هر اسکن کامل (ثانیه)؛ ستون سود هر ثانیه تازه می‌شود
+input int    RefreshSeconds    = 60;   // فاصله هر اسکن کامل (ثانیه)؛ شمارش معکوس در سربرگ دیده می‌شود
 
 //---- نوتیفیکیشن
 input bool   EnablePush        = true; // نوتیفیکیشن موبایل برای هر AB جدید قطعی شده
@@ -58,11 +58,14 @@ input int    PanelX            = 70;   // فاصله جدول از لبه انت
 input int    PanelY            = 20;   // فاصله جدول از بالا
 input int    PanelWidth        = 470;  // عرض جدول
 input int    NewMarkMinutes    = 45;   // تا چند دقیقه سن الگو در ستون AGE نوشته شود
+input bool   PersistAge        = true; // سن الگوها بین تعویض پروفایل و ری استارت حفظ شود
+input int    ExpiredKeepSeconds = 60;  // الگوی حذف شده چند ثانیه خاکستری در انتهای جدول بماند
 input int    PanelFontSize     = 9;
 input color  PanelTitleColor   = clrWhite;
 input color  PanelTextColor    = clrGainsboro;
 input color  PanelBullColor    = clrDeepSkyBlue;
 input color  PanelBearColor    = clrOrange;
+input color  PanelExpiredColor = clrGray;   // رنگ ردیف های در حال حذف
 input color  PanelBackColor    = clrBlack;
 input color  PanelBorderColor  = clrDimGray; // رنگ قاب جدول
 input int    PanelMaxRows      = 100;  // سقف ردیف؛ به هر حال از ارتفاع چارت بیشتر نمی‌شود
@@ -72,12 +75,17 @@ input int    PanelMaxRows      = 100;  // سقف ردیف؛ به هر حال ا�
 struct ScanRow
 {
    string          symbol;
+   int             symIndex;   // جای نماد در ScanSymbols، برای گروه بندی
    ENUM_TIMEFRAMES tf;
+   int             tfIndex;
    bool            isBull;
    ABState         state;
    bool            hasBreak;
-   int             rank;    // هر چه کمتر، مهم تر
-   string          newMark; // سن الگو به دقیقه، اگر تازه باشد
+   int             rank;       // هر چه کمتر، مهم تر
+   int             groupRank;  // بهترین رتبه همین نماد
+   string          newMark;    // سن الگو به دقیقه، اگر تازه باشد
+   string          key;        // شناسه یکتای الگو
+   datetime        goneAt;     // 0 یعنی زنده؛ وگرنه لحظه ای که از لیست افتاد
 };
 
 string   scanSymbolList[];
@@ -97,17 +105,30 @@ datetime seenFirst[];
 int      seenCount = 0;
 bool     firstScanDone = false;   // اولین اسکن فقط ثبت می‌کند و اطلاع نمی‌دهد
 
+// پیشوند متغیرهای سراسری ترمینال. عمدا شناسه چارت در آن نیست: باید بین
+// پروفایل ها مشترک باشد تا با عوض کردن پروفایل سن الگوها صفر نشود.
+#define ABH_GV_PREFIX "ABHscan_"
+
 string   objPrefix;
 int      drawnRows = 0;
 
-// آنچه در آخرین اسکن رسم شد، تا بشود فقط ستون سود را تازه کرد بدون اسکن دوباره
+// آخرین وضعیت جدول، تا رسم دوباره (تغییر اندازه چارت، انقضای ردیف خاکستری)
+// بدون اجرای اسکن سنگین ممکن باشد
+ScanRow  panelRows[];
+int      panelRowCount = 0;
+ScanRow  lastLive[];
+int      lastLiveCount = 0;
+ScanRow  goneRows[];
+int      goneCount = 0;
+
+// آنچه در آخرین رسم روی صفحه رفت، تا بشود فقط ستون سود را تازه کرد
 string   liveSymbol[];
 string   livePrefix[];
 color    liveColor[];
 int      liveRow[];
 int      liveCount   = 0;
 int      timerTicks  = 0;
-int      panelLeft = 0;   // مختصات چپ جدول، هر اسکن دوباره حساب می‌شود
+int      panelLeft = 0;   // مختصات چپ جدول، هر بار دوباره حساب می‌شود
 
 //+------------------------------------------------------------------+
 // برای گوشه راست از CORNER_RIGHT_UPPER استفاده نمی‌کنیم، چون آن حالت جهت
@@ -136,8 +157,7 @@ int MaxRowsThatFit()
 }
 
 //+------------------------------------------------------------------+
-// هر چه رتبه کمتر، الگو به معامله نزدیک تر. جدول با همین مرتب می‌شود تا
-// وقتی ردیف ها از سقف نمایش بیشتر شدند، مهم ترین ها بالا بمانند.
+// هر چه رتبه کمتر، الگو به معامله نزدیک تر.
 int StateRank(SwingAB &s)
 {
    if(s.state == AB_BROKEN)       return s.hasValidBreak ? 0 : 1;
@@ -301,6 +321,46 @@ void BuildTFList()
 }
 
 //+------------------------------------------------------------------+
+// --- ماندگاری سن الگو
+//
+// متغیرهای سراسری ترمینال روی دیسک ذخیره می‌شوند و با عوض کردن پروفایل یا
+// بستن ترمینال از بین نمی‌روند. آرایه های داخل اندیکاتور اما با هر بار
+// نصب دوباره صفر می‌شوند، پس ستون AGE بدون این کار هر بار از نو شروع می‌کرد.
+//
+// علامت مقدار معنا دارد: مثبت یعنی الگو موقع دیده شدن «تازه» بود و همان عدد
+// زمان اولین رویت است؛ منفی یعنی موقع اولین اسکن از قبل روی چارت بوده و
+// نباید تازه حساب شود. قدر مطلق در هر دو حالت زمان نوشتن است، که برای
+// پاکسازی به کار می‌آید.
+string GVName(string sym, ENUM_TIMEFRAMES tf, datetime timeA)
+{
+   string s = sym;
+   if(StringLen(s) > 24) s = StringSubstr(s, 0, 24);   // سقف نام ۶۳ کاراکتر است
+
+   return ABH_GV_PREFIX + s + "_" + IntegerToString((int)tf) + "_" +
+          IntegerToString((long)timeA);
+}
+
+// ورودی های کهنه دور ریخته می‌شوند تا فهرست متغیرهای سراسری بی نهایت رشد
+// نکند. الگو حداکثر یک روز معتبر است، پس دو روز حاشیه امن کافی است.
+void PruneOldGlobals()
+{
+   if(!PersistAge) return;
+
+   double now = (double)TimeLocal();
+   int total = GlobalVariablesTotal();
+
+   for(int i = total - 1; i >= 0; i--)
+   {
+      string name = GlobalVariableName(i);
+      if(StringFind(name, ABH_GV_PREFIX) != 0) continue;
+
+      double v = MathAbs(GlobalVariableGet(name));
+      if(v <= 0.0 || (now - v) > 2.0 * 86400.0)
+         GlobalVariableDel(name);
+   }
+}
+
+//+------------------------------------------------------------------+
 int SeenIndex(string key)
 {
    for(int i = 0; i < seenCount; i++)
@@ -308,8 +368,25 @@ int SeenIndex(string key)
    return -1;
 }
 
-int RememberSeen(string key, bool preExisting)
+// preExisting یعنی این الگو در اولین اسکن این نصب دیده شده و نباید «تازه»
+// شمرده شود. برگشتی: اندیس در seenKeys، و alreadyKnown می‌گوید که آیا این
+// الگو از قبل (در نصب قبلی) هم شناخته شده بود یا واقعا اولین بار است.
+int RememberSeen(string key, string gv, bool preExisting, bool &alreadyKnown)
 {
+   alreadyKnown = false;
+   datetime first = preExisting ? 0 : TimeLocal();
+
+   if(PersistAge && GlobalVariableCheck(gv))
+   {
+      double v = GlobalVariableGet(gv);
+      alreadyKnown = true;
+      first = (v > 0.0) ? (datetime)v : 0;
+   }
+   else if(PersistAge)
+   {
+      GlobalVariableSet(gv, preExisting ? -(double)TimeLocal() : (double)TimeLocal());
+   }
+
    // فهرست بی نهایت رشد نکند: نصف قدیمی ها دور ریخته می‌شود
    if(seenCount >= 6000)
    {
@@ -329,7 +406,7 @@ int RememberSeen(string key, bool preExisting)
    }
 
    seenKeys[seenCount]  = key;
-   seenFirst[seenCount] = preExisting ? 0 : TimeLocal();
+   seenFirst[seenCount] = first;
    seenCount++;
    return seenCount - 1;
 }
@@ -447,17 +524,273 @@ string PadRight(string s, int width)
    return r;
 }
 
+string TwoDigits(int v)
+{
+   return (v < 10 ? "0" : "") + IntegerToString(v);
+}
+
+//+------------------------------------------------------------------+
+// سربرگ، شامل شمارش معکوس تا اسکن بعدی. هر ثانیه تازه می‌شود تا معلوم باشد
+// عددهای جدول چقدر کهنه اند و سیکل به کجا رسیده.
+string HeaderText()
+{
+   int period = RefreshSeconds;
+   if(period < 5) period = 5;
+
+   int left = period - timerTicks;
+   if(left < 0) left = 0;
+
+   return "ABHunter  " + IntegerToString(scanSymbolCount) + " sym x " +
+          IntegerToString(scanTFCount) + " tf  <- " + tfSource +
+          "   next " + TwoDigits(left / 60) + ":" + TwoDigits(left % 60);
+}
+
+string StateTextOf(ScanRow &r)
+{
+   if(r.state == AB_BROKEN)   return r.hasBreak ? "BREAK" : "HUNT";
+   if(r.state == AB_RETRACED) return "C ok";
+   return "WAIT";
+}
+
+//+------------------------------------------------------------------+
+// مرتب سازی: اول نمادی که به معامله نزدیک تر است، ولی همه ردیف های یک نماد
+// کنار هم. اینطور لازم نیست یک نماد را دو جای جدول دنبال کنید، و در عین حال
+// وقتی ردیف ها از ارتفاع چارت بیشتر شدند مهم ترین نمادها بالا می‌مانند.
+void SortRows(ScanRow &r[], int n)
+{
+   // بهترین (کمترین) رتبه هر نماد
+   for(int i = 0; i < n; i++)
+   {
+      int best = r[i].rank;
+      for(int j = 0; j < n; j++)
+         if(r[j].symIndex == r[i].symIndex && r[j].rank < best) best = r[j].rank;
+      r[i].groupRank = best;
+   }
+
+   for(int i = 0; i < n - 1; i++)
+   {
+      int best = i;
+
+      for(int j = i + 1; j < n; j++)
+      {
+         if(r[j].groupRank != r[best].groupRank)
+         {
+            if(r[j].groupRank < r[best].groupRank) best = j;
+            continue;
+         }
+         if(r[j].symIndex != r[best].symIndex)
+         {
+            if(r[j].symIndex < r[best].symIndex) best = j;
+            continue;
+         }
+         if(r[j].rank != r[best].rank)
+         {
+            if(r[j].rank < r[best].rank) best = j;
+            continue;
+         }
+         if(r[j].tfIndex < r[best].tfIndex) best = j;
+      }
+
+      if(best != i)
+      {
+         ScanRow t;      // متاتریدر مقداردهی اولیه ساختار در خود اعلان را قبول ندارد
+         t       = r[i];
+         r[i]    = r[best];
+         r[best] = t;
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+// الگویی که از فهرست می‌افتد بلافاصله ناپدید نمی‌شود: مدتی خاکستری در انتهای
+// جدول می‌ماند تا معلوم باشد چه چیزی اعتبارش تمام شده.
+bool PruneGone()
+{
+   if(ExpiredKeepSeconds <= 0)
+   {
+      bool had = (goneCount > 0);
+      goneCount = 0;
+      return had;
+   }
+
+   datetime now = TimeLocal();
+   bool changed = false;
+
+   for(int g = goneCount - 1; g >= 0; g--)
+   {
+      if((now - goneRows[g].goneAt) < ExpiredKeepSeconds) continue;
+
+      for(int k = g; k < goneCount - 1; k++) goneRows[k] = goneRows[k + 1];
+      goneCount--;
+      changed = true;
+   }
+
+   return changed;
+}
+
+void UpdateGoneList(ScanRow &cur[], int nCur)
+{
+   datetime now = TimeLocal();
+
+   // هر چه دوباره زنده شده از فهرست خاکستری ها بیرون می‌آید
+   for(int g = goneCount - 1; g >= 0; g--)
+   {
+      bool aliveAgain = false;
+      for(int i = 0; i < nCur; i++)
+         if(cur[i].key == goneRows[g].key) { aliveAgain = true; break; }
+
+      if(!aliveAgain) continue;
+
+      for(int k = g; k < goneCount - 1; k++) goneRows[k] = goneRows[k + 1];
+      goneCount--;
+   }
+
+   PruneGone();
+
+   if(ExpiredKeepSeconds <= 0) return;
+
+   // هر چه در اسکن قبل بود و حالا نیست، مهلت خاکستری می‌گیرد
+   for(int i = 0; i < lastLiveCount; i++)
+   {
+      bool stillHere = false;
+      for(int j = 0; j < nCur; j++)
+         if(cur[j].key == lastLive[i].key) { stillHere = true; break; }
+      if(stillHere) continue;
+
+      bool already = false;
+      for(int g = 0; g < goneCount; g++)
+         if(goneRows[g].key == lastLive[i].key) { already = true; break; }
+      if(already) continue;
+
+      if(goneCount >= ArraySize(goneRows)) ArrayResize(goneRows, goneCount + 64);
+
+      goneRows[goneCount]         = lastLive[i];
+      goneRows[goneCount].goneAt  = now;
+      goneRows[goneCount].newMark = "";
+      goneCount++;
+   }
+}
+
+// ردیف های زنده و بعد خاکستری ها، همان چیزی که رسم می‌شود
+void BuildPanelRows()
+{
+   ArrayResize(panelRows, lastLiveCount + goneCount + 1);
+   panelRowCount = 0;
+
+   for(int i = 0; i < lastLiveCount; i++)
+   {
+      panelRows[panelRowCount] = lastLive[i];
+      panelRowCount++;
+   }
+
+   for(int g = 0; g < goneCount; g++)
+   {
+      panelRows[panelRowCount] = goneRows[g];
+      panelRowCount++;
+   }
+}
+
+//+------------------------------------------------------------------+
+// رسم جدول از روی panelRows. اسکن نمی‌کند، پس می‌شود با تغییر اندازه چارت
+// هم صدایش زد — قبلا برای جا شدن ردیف های جدید باید تا اسکن بعدی صبر می‌کردید.
+void DrawPanel()
+{
+   panelLeft = PanelLeftX();
+   EnsurePanelBackground();
+
+   int row = 0;
+   PanelRow(row, HeaderText(), PanelTitleColor);
+   row++;
+   PanelRow(row, PadRight("SYMBOL", 11) + PadRight("TF", 5) + PadRight("DIR", 5) +
+                 PadRight("STATE", 7) + PadRight("AGE", 5) + PadRight("POS", 6) + "P/L",
+            PanelTitleColor);
+   row++;
+
+   // سقف نمایش: کمترین مقدار بین ورودی کاربر و آنچه در ارتفاع چارت جا می‌شود.
+   // سه ردیف برای سربرگ ها و خط «چند مورد دیگر» کنار گذاشته می‌شود.
+   int rowLimit = MaxRowsThatFit() - 3;
+   if(rowLimit > PanelMaxRows) rowLimit = PanelMaxRows;
+   if(rowLimit < 1) rowLimit = 1;
+
+   ArrayResize(liveSymbol, rowLimit + 4);
+   ArrayResize(livePrefix, rowLimit + 4);
+   ArrayResize(liveColor,  rowLimit + 4);
+   ArrayResize(liveRow,    rowLimit + 4);
+   liveCount = 0;
+
+   int shown = 0;
+
+   for(int i = 0; i < panelRowCount && shown < rowLimit; i++)
+   {
+      string dir = panelRows[i].isBull ? "BULL" : "BEAR";
+
+      // بخش ثابت ردیف جدا نگه داشته می‌شود تا RefreshLive بتواند فقط دو
+      // ستون آخر را دوباره بسازد، بدون اینکه کل اسکن تکرار شود.
+      string prefix = PadRight(panelRows[i].symbol, 11) +
+                      PadRight(TFToStr(panelRows[i].tf), 5) +
+                      PadRight(dir, 5) +
+                      PadRight(StateTextOf(panelRows[i]), 7) +
+                      PadRight(panelRows[i].newMark, 5);
+
+      color rowColor = (panelRows[i].goneAt > 0)
+                          ? PanelExpiredColor
+                          : (panelRows[i].isBull ? PanelBullColor : PanelBearColor);
+
+      string posMark; double profit; bool hasAny;
+      PositionInfo(panelRows[i].symbol, posMark, profit, hasAny);
+
+      PanelRow(row, prefix + PadRight(posMark, 6) + FormatProfit(profit, hasAny), rowColor);
+
+      liveSymbol[liveCount] = panelRows[i].symbol;
+      livePrefix[liveCount] = prefix;
+      liveColor[liveCount]  = rowColor;
+      liveRow[liveCount]    = row;
+      liveCount++;
+
+      row++;
+      shown++;
+   }
+
+   if(scanSymbolCount == 0)
+   {
+      PanelRow(row, "ScanSymbols is empty - set it, or enable ScanAllMarketWatch",
+               PanelTextColor);
+      row++;
+   }
+   else if(panelRowCount == 0)
+   {
+      PanelRow(row, "(no active pattern)", PanelTextColor);
+      row++;
+   }
+   else if(panelRowCount > shown)
+   {
+      // فقط تعداد گفتن کمکی نمی‌کرد؛ خود موارد جا مانده هم نوشته می‌شوند تا
+      // بدون بزرگ کردن پنجره چارت معلوم باشد چه چیزی بیرون از قاب مانده.
+      string more = "";
+      for(int i = shown; i < panelRowCount; i++)
+      {
+         if(StringLen(more) > 46) { more = more + " ..."; break; }
+         if(StringLen(more) > 0) more = more + ", ";
+         more = more + panelRows[i].symbol + " " + TFToStr(panelRows[i].tf);
+      }
+
+      PanelRow(row, "+" + IntegerToString(panelRowCount - shown) + ": " + more,
+               PanelTextColor);
+      row++;
+   }
+
+   ClearRowsFrom(row);
+   drawnRows = row;
+
+   SizePanelBackground(row);
+   ChartRedraw();
+}
+
 //+------------------------------------------------------------------+
 void RunScan()
 {
    if(scanSymbolCount == 0) BuildSymbolList();
    BuildTFList();
-
-   // مختصات هر بار دوباره حساب می‌شود تا با تغییر اندازه چارت جابجا شود
-   panelLeft = PanelLeftX();
-
-   // قبل از هر لیبلی، تا ترتیب رسم درست بماند
-   EnsurePanelBackground();
 
    ScanRow rows[];
    int nRows = 0;
@@ -491,16 +824,20 @@ void RunScan()
             string key = sym + "|" + IntegerToString((int)tf) + "|" +
                          IntegerToString((long)active[k].timeA);
 
-            int si = SeenIndex(key);
+            int seenIdx = SeenIndex(key);
 
-            if(si < 0)
+            if(seenIdx < 0)
             {
                // الگوهایی که موقع نصب از قبل روی چارت بودند «تازه» نیستند
-               si = RememberSeen(key, !firstScanDone);
+               bool alreadyKnown = false;
+               seenIdx = RememberSeen(key, GVName(sym, tf, active[k].timeA),
+                                      !firstScanDone, alreadyKnown);
 
                // اولین اسکن فقط ثبت می‌کند، وگرنه لحظه نصب با انبوه
-               // اطلاع رسانی از الگوهای قدیمی روبرو می‌شوید
-               if(firstScanDone && EnablePush && PassesFilter(rank, NotifyFilter))
+               // اطلاع رسانی از الگوهای قدیمی روبرو می‌شوید. الگویی هم که از
+               // نصب قبلی شناخته شده بود دوباره اطلاع نمی‌دهد.
+               if(firstScanDone && !alreadyKnown && EnablePush &&
+                  PassesFilter(rank, NotifyFilter))
                {
                   SendNotification("ABHunter " + sym + " " + TFToStr(tf) + " " +
                                    (active[k].isBull ? "BULL" : "BEAR") +
@@ -512,126 +849,44 @@ void RunScan()
 
             if(nRows >= ArraySize(rows)) ArrayResize(rows, nRows + 256);
 
-            rows[nRows].symbol   = sym;
-            rows[nRows].tf       = tf;
-            rows[nRows].isBull   = active[k].isBull;
-            rows[nRows].state    = active[k].state;
-            rows[nRows].hasBreak = active[k].hasValidBreak;
-            rows[nRows].rank     = rank;
+            rows[nRows].symbol    = sym;
+            rows[nRows].symIndex  = si;
+            rows[nRows].tf        = tf;
+            rows[nRows].tfIndex   = ti;
+            rows[nRows].isBull    = active[k].isBull;
+            rows[nRows].state     = active[k].state;
+            rows[nRows].hasBreak  = active[k].hasValidBreak;
+            rows[nRows].rank      = rank;
+            rows[nRows].groupRank = rank;
+            rows[nRows].key       = key;
+            rows[nRows].goneAt    = 0;
+
             // به جای یک ستاره یکسان، سن الگو نوشته می‌شود تا با یک نگاه معلوم
             // باشد کدام تازه تر است
             rows[nRows].newMark = "";
-            if(NewMarkMinutes > 0 && seenFirst[si] > 0)
+            if(NewMarkMinutes > 0 && seenFirst[seenIdx] > 0)
             {
-               int ageMin = (int)((TimeLocal() - seenFirst[si]) / 60);
+               int ageMin = (int)((TimeLocal() - seenFirst[seenIdx]) / 60);
                if(ageMin <= NewMarkMinutes)
                   rows[nRows].newMark = IntegerToString(ageMin) + "m";
             }
-                     // فقط برای فیلتر و مرتب سازی لازم نیست؛ در زمان رسم پر می‌شود
+
             nRows++;
          }
       }
    }
 
-   // --- سربرگ
-   int row = 0;
-   PanelRow(row, "ABHunter  " + IntegerToString(scanSymbolCount) + " sym x " +
-                 IntegerToString(scanTFCount) + " tf  <- " + tfSource, PanelTitleColor);
-   row++;
-   PanelRow(row, PadRight("SYMBOL", 11) + PadRight("TF", 5) + PadRight("DIR", 5) +
-                 PadRight("STATE", 7) + PadRight("AGE", 5) + PadRight("POS", 6) + "P/L",
-            PanelTitleColor);
-   row++;
+   SortRows(rows, nRows);
 
-   ArrayResize(liveSymbol, PanelMaxRows + 4);
-   ArrayResize(livePrefix, PanelMaxRows + 4);
-   ArrayResize(liveColor,  PanelMaxRows + 4);
-   ArrayResize(liveRow,    PanelMaxRows + 4);
-   liveCount = 0;
+   // مقایسه با اسکن قبل باید قبل از جایگزینی lastLive انجام شود
+   UpdateGoneList(rows, nRows);
 
-   // --- ردیف ها به ترتیب اهمیت. مرتب سازی انتخابی ساده کافی است چون فقط
-   //     به تعداد PanelMaxRows بار اجرا می‌شود.
-   // سقف نمایش: هر چه کمتر باشد بین ورودی کاربر و آنچه در ارتفاع چارت جا می‌شود.
-   // سه ردیف برای سربرگ ها و خط «چند مورد دیگر» کنار گذاشته می‌شود.
-   int rowLimit = MaxRowsThatFit() - 3;
-   if(rowLimit > PanelMaxRows) rowLimit = PanelMaxRows;
-   if(rowLimit < 1) rowLimit = 1;
+   ArrayResize(lastLive, nRows + 1);
+   for(int i = 0; i < nRows; i++) lastLive[i] = rows[i];
+   lastLiveCount = nRows;
 
-   int shown = 0;
-   bool used[];
-   if(nRows > 0)
-   {
-      ArrayResize(used, nRows);
-      for(int i = 0; i < nRows; i++) used[i] = false;
-   }
-
-   while(shown < rowLimit)
-   {
-      int best = -1;
-      for(int i = 0; i < nRows; i++)
-      {
-         if(used[i]) continue;
-         if(best < 0 || rows[i].rank < rows[best].rank) best = i;
-      }
-      if(best < 0) break;
-
-      used[best] = true;
-
-      string dir = rows[best].isBull ? "BULL" : "BEAR";
-      string st  = (rows[best].state == AB_BROKEN)
-                      ? (rows[best].hasBreak ? "BREAK" : "HUNT")
-                      : (rows[best].state == AB_RETRACED ? "C ok" : "WAIT");
-
-      // بخش ثابت ردیف جدا نگه داشته می‌شود تا RefreshProfits بتواند فقط دو
-      // ستون آخر را دوباره بسازد، بدون اینکه کل اسکن تکرار شود.
-      string prefix = PadRight(rows[best].symbol, 11) +
-                      PadRight(TFToStr(rows[best].tf), 5) +
-                      PadRight(dir, 5) +
-                      PadRight(st, 7) +
-                      PadRight(rows[best].newMark, 5);
-
-      color rowColor = rows[best].isBull ? PanelBullColor : PanelBearColor;
-
-      string posMark; double profit; bool hasAny;
-      PositionInfo(rows[best].symbol, posMark, profit, hasAny);
-
-      PanelRow(row, prefix + PadRight(posMark, 6) + FormatProfit(profit, hasAny), rowColor);
-
-      if(liveCount < ArraySize(liveSymbol))
-      {
-         liveSymbol[liveCount] = rows[best].symbol;
-         livePrefix[liveCount] = prefix;
-         liveColor[liveCount]  = rowColor;
-         liveRow[liveCount]    = row;
-         liveCount++;
-      }
-
-      row++;
-      shown++;
-   }
-
-   if(scanSymbolCount == 0)
-   {
-      PanelRow(row, "ScanSymbols is empty - set it, or enable ScanAllMarketWatch",
-               PanelTextColor);
-      row++;
-   }
-   else if(nRows == 0)
-   {
-      PanelRow(row, "(no active pattern)", PanelTextColor);
-      row++;
-   }
-   else if(nRows > shown)
-   {
-      PanelRow(row, "... +" + IntegerToString(nRows - shown) + " more", PanelTextColor);
-      row++;
-   }
-
-   ClearRowsFrom(row);
-   drawnRows = row;
-
-   SizePanelBackground(row);
-   ChartRedraw();
+   BuildPanelRows();
+   DrawPanel();
 
    firstScanDone = true;
 }
@@ -643,9 +898,15 @@ int OnInit()
 
    ArrayResize(seenKeys,  512);
    ArrayResize(seenFirst, 512);
-   seenCount = 0;
+   ArrayResize(goneRows,  64);
+   seenCount     = 0;
+   goneCount     = 0;
+   lastLiveCount = 0;
+   panelRowCount = 0;
    firstScanDone = false;
    drawnRows     = 0;
+
+   PruneOldGlobals();
 
    BuildSymbolList();
    BuildTFList();
@@ -659,10 +920,11 @@ int OnInit()
 }
 
 //+------------------------------------------------------------------+
-// فقط دو ستون آخر را تازه می‌کند. سبک است، پس می‌تواند هر ثانیه اجرا شود.
-void RefreshProfits()
+// فقط سربرگ و دو ستون آخر را تازه می‌کند. سبک است، پس هر ثانیه اجرا می‌شود.
+void RefreshLive()
 {
-   if(liveCount == 0) return;
+   panelLeft = PanelLeftX();
+   PanelRow(0, HeaderText(), PanelTitleColor);
 
    for(int i = 0; i < liveCount; i++)
    {
@@ -678,7 +940,7 @@ void RefreshProfits()
 
 //+------------------------------------------------------------------+
 // تایمر هر ثانیه است ولی اسکن سنگین فقط هر RefreshSeconds ثانیه اجرا می‌شود.
-// بین آن ها فقط ستون سود و زیان تازه می‌شود تا عدد لحظه ای بماند.
+// بین آن ها شمارش معکوس سربرگ و ستون سود و زیان تازه می‌شود.
 void OnTimer()
 {
    timerTicks++;
@@ -690,11 +952,27 @@ void OnTimer()
    {
       timerTicks = 0;
       RunScan();
+      return;
    }
-   else
+
+   // مهلت ردیف های خاکستری ممکن است وسط دو اسکن تمام شود
+   if(PruneGone())
    {
-      RefreshProfits();
+      BuildPanelRows();
+      DrawPanel();
+      return;
    }
+
+   RefreshLive();
+}
+
+//+------------------------------------------------------------------+
+void OnChartEvent(const int id, const long &lparam, const double &dparam,
+                  const string &sparam)
+{
+   // با تغییر اندازه چارت، جدول همان لحظه دوباره چیده می‌شود. قبلا باید تا
+   // اسکن بعدی صبر می‌کردید تا تعداد ردیف ها با ارتفاع جدید جور شود.
+   if(id == CHARTEVENT_CHART_CHANGE) DrawPanel();
 }
 
 //+------------------------------------------------------------------+

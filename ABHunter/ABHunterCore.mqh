@@ -11,7 +11,8 @@
 
 //---- تنظیمات تشخیص سویینگ
 input int    MinCandles           = 3;
-input int    MaxCandles           = 10;
+input int    MaxCandles           = 10;   // طول پنجره تشخیص، نه طول خود سویینگ
+input int    MaxABSpan            = 30;   // حداکثر طول سویینگ AB بر حسب کندل
 input int    MaxOppositeCandles   = 1;
 input double MinBodyPercent       = 50.0;  // حداقل درصد بادی کندل (0 تا 100)
 input int    MaxNonStandard       = 1;
@@ -231,31 +232,81 @@ int CollectSwings(MqlRates &rates[], int rates_total, int scanFrom, SwingAB &out
             priceA = rates[idxA].high;
          }
 
-         // B تا «اولین اصلاح معنادار» جلو می‌رود، نه فقط چند کندل ثابت.
-         // اصلاح با بادی سنجیده می‌شود، نه با سایه.
-         idxB   = idxA;
-         priceB = isBullish ? rates[idxA].high : rates[idxA].low;
-
-         for(int m = idxA + 1; m < rates_total; m++)
+         // پنجره تشخیص طول ثابتی دارد (MaxCandles)، ولی خود سویینگ ندارد.
+         // پس هر دو سر آن باز می‌شود: B تا اولین اصلاح معنادار به جلو، و
+         // A تا مبدا واقعی حرکت به عقب.
+         //
+         // بدون بسط A، هر ایمپالسی که بلندتر از پنجره باشد، A اش وسط سویینگ
+         // می‌افتد. آنوقت طول AB کوتاه تر از واقعیت شمرده می‌شود، آستانه های
+         // ۲۰ و ۶۰ درصد روی یک عدد کوچک حساب می‌شوند، یک اصلاح جزئی از سقف
+         // ۶۰ درصد رد می‌شود و الگو بی جهت باطل می‌گردد — بعد همان حرکت به
+         // شکل یک AB تازه دوباره تشخیص داده می‌شود.
+         //
+         // دو پاس اجرا می‌شود چون بسط A طول سویینگ را بزرگ می‌کند و آستانه
+         // اصلاحی که B را متوقف کرده بود جابجا می‌شود؛ پاس دوم B را با طول
+         // درست دوباره حساب می‌کند.
+         for(int pass = 0; pass < 2; pass++)
          {
-            if(isBullish)
+            // --- بسط B به جلو. اصلاح با بادی سنجیده می‌شود، نه با سایه.
+            idxB   = idxA;
+            priceB = isBullish ? rates[idxA].high : rates[idxA].low;
+
+            for(int m = idxA + 1; m < rates_total; m++)
             {
-               if(rates[m].high > priceB) { priceB = rates[m].high; idxB = m; continue; }
-               double swing = priceB - priceA;
-               if(swing > 0.0)
+               if(isBullish)
                {
-                  double bodyLow = MathMin(rates[m].open, rates[m].close);
-                  if((priceB - bodyLow) >= swing * RetraceMinPercent / 100.0) break;
+                  if(rates[m].high > priceB) { priceB = rates[m].high; idxB = m; continue; }
+                  double swing = priceB - priceA;
+                  if(swing > 0.0)
+                  {
+                     double bodyLow = MathMin(rates[m].open, rates[m].close);
+                     if((priceB - bodyLow) >= swing * RetraceMinPercent / 100.0) break;
+                  }
+               }
+               else
+               {
+                  if(rates[m].low < priceB) { priceB = rates[m].low; idxB = m; continue; }
+                  double swing = priceA - priceB;
+                  if(swing > 0.0)
+                  {
+                     double bodyHigh = MathMax(rates[m].open, rates[m].close);
+                     if((bodyHigh - priceB) >= swing * RetraceMinPercent / 100.0) break;
+                  }
                }
             }
-            else
+
+            if(pass > 0) break;
+            if(idxA == idxB) break;
+
+            // --- بسط A به عقب، دقیقا آینه بسط B.
+            // در یک لگ صعودی هر چه به عقب برویم کف ها پایین تر است تا به
+            // مبدا برسیم؛ بعد از آن وارد لگ نزولی قبلی می‌شویم و کف ها بالاتر
+            // می‌روند. همان شرط ۲۰ درصد بادی که B را متوقف می‌کند، اینجا هم
+            // جلوی رفتن به داخل حرکت قبلی را می‌گیرد.
+            int minA = idxB - MaxABSpan + 1;
+            if(minA < 0) minA = 0;
+
+            for(int m = idxA - 1; m >= minA; m--)
             {
-               if(rates[m].low < priceB) { priceB = rates[m].low; idxB = m; continue; }
-               double swing = priceA - priceB;
-               if(swing > 0.0)
+               if(isBullish)
                {
-                  double bodyHigh = MathMax(rates[m].open, rates[m].close);
-                  if((bodyHigh - priceB) >= swing * RetraceMinPercent / 100.0) break;
+                  if(rates[m].low < priceA) { priceA = rates[m].low; idxA = m; continue; }
+                  double swingA = priceB - priceA;
+                  if(swingA > 0.0)
+                  {
+                     double bodyHi = MathMax(rates[m].open, rates[m].close);
+                     if((bodyHi - priceA) >= swingA * RetraceMinPercent / 100.0) break;
+                  }
+               }
+               else
+               {
+                  if(rates[m].high > priceA) { priceA = rates[m].high; idxA = m; continue; }
+                  double swingA = priceA - priceB;
+                  if(swingA > 0.0)
+                  {
+                     double bodyLo = MathMin(rates[m].open, rates[m].close);
+                     if((priceA - bodyLo) >= swingA * RetraceMinPercent / 100.0) break;
+                  }
                }
             }
          }
@@ -321,14 +372,20 @@ int CollectSwings(MqlRates &rates[], int rates_total, int scanFrom, SwingAB &out
          // جلوگیری از AB تو در تو
          if(idxB >= lastAcceptedA) continue;
 
+         // میانگین رنج روی خود محدوده AB حساب می‌شود، نه روی پنجره تشخیص —
+         // حالا که هر دو سر سویینگ باز می‌شود این دو می‌توانند خیلی متفاوت باشند.
          double totalRange = 0.0;
-         for(int k = startIdx; k <= endIdx; k++)
+         for(int k = idxA; k <= idxB; k++)
             totalRange += (rates[k].high - rates[k].low);
-         double avgRange = totalRange / len;
+         double avgRange = totalRange / abTotal;
          if(avgRange <= 0.0) continue;
 
          double abLength = MathAbs(priceB - priceA);
-         if(abLength < MinABRatio * avgRange || abLength > MaxABRatio * avgRange)
+
+         // سقف نسبت با طول سویینگ رشد می‌کند: یک ایمپالس ۲۰ کندلی طبیعتا چند
+         // برابر یک ایمپالس ۵ کندلی است و نباید فقط به خاطر طولش رد شود.
+         double spanScale = MathMax(1.0, (double)abTotal / (double)MaxCandles);
+         if(abLength < MinABRatio * avgRange || abLength > MaxABRatio * avgRange * spanScale)
             continue;
 
          // --- مومنتم 1: حرکت باید پله ای باشد (سقف بالاتر از کندل قبل)
