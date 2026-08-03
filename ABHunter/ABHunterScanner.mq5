@@ -17,7 +17,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "2.50"
+#property version   "2.51"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
@@ -540,8 +540,12 @@ string HeaderText()
    int left = period - timerTicks;
    if(left < 0) left = 0;
 
-   return "ABHunter  " + IntegerToString(scanSymbolCount) + " sym x " +
-          IntegerToString(scanTFCount) + " tf  <- " + tfSource +
+   // تعداد نماد و تایم فریم عمدا نوشته نمی‌شود؛ خود شما آن را تنظیم کرده اید.
+   // منبع تایم فریم فقط وقتی می‌آید که از چارت خوانده شده باشد، چون آن یکی
+   // ممکن است بدون اینکه بدانید عوض شود.
+   string src = (tfSource == "inputs") ? "" : "  <- " + tfSource;
+
+   return "ABHunter" + src +
           "   next " + TwoDigits(left / 60) + ":" + TwoDigits(left % 60);
 }
 
