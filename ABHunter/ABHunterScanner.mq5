@@ -17,7 +17,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "2.42"
+#property version   "2.43"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
@@ -45,7 +45,7 @@ input string ScanSymbols       = "XAUUSD,DJIUSD,BRNUSD,SPXUSD,NDXUSD,NZDJPY,USDC
 input bool   ScanAllMarketWatch = false; // اگر ScanSymbols خالی بود، همه Market Watch اسکن شود
 input string ScanTimeframes    = "H4,H3,H2,H1,M30,M20,M15"; // تایم فریم ها با کاما
 input bool   SyncTFWithChart   = false;// به جای فهرست بالا، سه تایم فریم دکمه های چارت خوانده شود
-input int    RefreshSeconds    = 60;   // فاصله هر اسکن (ثانیه)
+input int    RefreshSeconds    = 60;   // فاصله هر اسکن کامل (ثانیه)؛ ستون سود هر ثانیه تازه می‌شود
 
 //---- نوتیفیکیشن
 input bool   EnablePush        = true; // نوتیفیکیشن موبایل برای هر AB جدید قطعی شده
@@ -56,7 +56,7 @@ input PanelFilterMode PanelFilter = FILTER_PRE_HUNT; // کدام وضعیت ها
 input PanelCornerMode PanelCorner = PANEL_TOP_RIGHT; // جدول در کدام گوشه باشد
 input int    PanelX            = 70;   // فاصله جدول از لبه انتخاب شده
 input int    PanelY            = 20;   // فاصله جدول از بالا
-input int    PanelWidth        = 400;  // عرض جدول
+input int    PanelWidth        = 470;  // عرض جدول
 input int    NewMarkMinutes    = 45;   // تا چند دقیقه سن الگو در ستون AGE نوشته شود
 input int    PanelFontSize     = 9;
 input color  PanelTitleColor   = clrWhite;
@@ -78,7 +78,6 @@ struct ScanRow
    bool            hasBreak;
    int             rank;    // هر چه کمتر، مهم تر
    string          newMark; // سن الگو به دقیقه، اگر تازه باشد
-   string          posMark; // معامله باز روی این نماد
 };
 
 string   scanSymbolList[];
@@ -100,6 +99,14 @@ bool     firstScanDone = false;   // اولین اسکن فقط ثبت می‌ک
 
 string   objPrefix;
 int      drawnRows = 0;
+
+// آنچه در آخرین اسکن رسم شد، تا بشود فقط ستون سود را تازه کرد بدون اسکن دوباره
+string   liveSymbol[];
+string   livePrefix[];
+color    liveColor[];
+int      liveRow[];
+int      liveCount   = 0;
+int      timerTicks  = 0;
 int      panelLeft = 0;   // مختصات چپ جدول، هر اسکن دوباره حساب می‌شود
 
 //+------------------------------------------------------------------+
@@ -327,23 +334,38 @@ int RememberSeen(string key, bool preExisting)
    return seenCount - 1;
 }
 
-// آیا روی این نماد معامله بازی هست؟
-string PositionMark(string sym)
+// وضعیت و سود شناور معامله های باز روی یک نماد، در یک بار پیمایش.
+// سود شامل سواپ هم هست تا عدد همان چیزی باشد که در ترمینال می‌بینید.
+// واحدش ارز حساب است، نه لزوما دلار.
+void PositionInfo(string sym, string &mark, double &profit, bool &hasAny)
 {
    bool hasBuy = false, hasSell = false;
+   profit = 0.0;
+
    int total = PositionsTotal();
 
    for(int i = 0; i < total; i++)
    {
       if(PositionGetSymbol(i) != sym) continue;
+
       if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) hasBuy = true;
       else                                                       hasSell = true;
+
+      profit += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
    }
 
-   if(hasBuy && hasSell) return "B+S";
-   if(hasBuy)  return "BUY";
-   if(hasSell) return "SELL";
-   return "";
+   hasAny = (hasBuy || hasSell);
+
+   if(hasBuy && hasSell) mark = "B+S";
+   else if(hasBuy)       mark = "BUY";
+   else if(hasSell)      mark = "SELL";
+   else                  mark = "";
+}
+
+string FormatProfit(double profit, bool hasAny)
+{
+   if(!hasAny) return "";
+   return (profit >= 0.0 ? "+" : "") + DoubleToString(profit, 2);
 }
 
 //+------------------------------------------------------------------+
@@ -505,7 +527,7 @@ void RunScan()
                if(ageMin <= NewMarkMinutes)
                   rows[nRows].newMark = IntegerToString(ageMin) + "m";
             }
-            rows[nRows].posMark  = PositionMark(sym);
+                     // فقط برای فیلتر و مرتب سازی لازم نیست؛ در زمان رسم پر می‌شود
             nRows++;
          }
       }
@@ -517,9 +539,15 @@ void RunScan()
                  IntegerToString(scanTFCount) + " tf  <- " + tfSource, PanelTitleColor);
    row++;
    PanelRow(row, PadRight("SYMBOL", 11) + PadRight("TF", 5) + PadRight("DIR", 5) +
-                 PadRight("STATE", 7) + PadRight("AGE", 5) + "POS",
+                 PadRight("STATE", 7) + PadRight("AGE", 5) + PadRight("POS", 6) + "P/L",
             PanelTitleColor);
    row++;
+
+   ArrayResize(liveSymbol, PanelMaxRows + 4);
+   ArrayResize(livePrefix, PanelMaxRows + 4);
+   ArrayResize(liveColor,  PanelMaxRows + 4);
+   ArrayResize(liveRow,    PanelMaxRows + 4);
+   liveCount = 0;
 
    // --- ردیف ها به ترتیب اهمیت. مرتب سازی انتخابی ساده کافی است چون فقط
    //     به تعداد PanelMaxRows بار اجرا می‌شود.
@@ -554,13 +582,30 @@ void RunScan()
                       ? (rows[best].hasBreak ? "BREAK" : "HUNT")
                       : (rows[best].state == AB_RETRACED ? "C ok" : "WAIT");
 
-      PanelRow(row, PadRight(rows[best].symbol, 11) +
-                    PadRight(TFToStr(rows[best].tf), 5) +
-                    PadRight(dir, 5) +
-                    PadRight(st, 7) +
-                    PadRight(rows[best].newMark, 5) +
-                    rows[best].posMark,
-               rows[best].isBull ? PanelBullColor : PanelBearColor);
+      // بخش ثابت ردیف جدا نگه داشته می‌شود تا RefreshProfits بتواند فقط دو
+      // ستون آخر را دوباره بسازد، بدون اینکه کل اسکن تکرار شود.
+      string prefix = PadRight(rows[best].symbol, 11) +
+                      PadRight(TFToStr(rows[best].tf), 5) +
+                      PadRight(dir, 5) +
+                      PadRight(st, 7) +
+                      PadRight(rows[best].newMark, 5);
+
+      color rowColor = rows[best].isBull ? PanelBullColor : PanelBearColor;
+
+      string posMark; double profit; bool hasAny;
+      PositionInfo(rows[best].symbol, posMark, profit, hasAny);
+
+      PanelRow(row, prefix + PadRight(posMark, 6) + FormatProfit(profit, hasAny), rowColor);
+
+      if(liveCount < ArraySize(liveSymbol))
+      {
+         liveSymbol[liveCount] = rows[best].symbol;
+         livePrefix[liveCount] = prefix;
+         liveColor[liveCount]  = rowColor;
+         liveRow[liveCount]    = row;
+         liveCount++;
+      }
+
       row++;
       shown++;
    }
@@ -605,18 +650,51 @@ int OnInit()
    BuildSymbolList();
    BuildTFList();
 
-   int period = RefreshSeconds;
-   if(period < 5) period = 5;
-   EventSetTimer(period);
+   timerTicks = 0;
+   liveCount  = 0;
+   EventSetTimer(1);   // هر ثانیه؛ اسکن کامل داخل OnTimer شمرده می‌شود
 
    RunScan();
    return(INIT_SUCCEEDED);
 }
 
 //+------------------------------------------------------------------+
+// فقط دو ستون آخر را تازه می‌کند. سبک است، پس می‌تواند هر ثانیه اجرا شود.
+void RefreshProfits()
+{
+   if(liveCount == 0) return;
+
+   for(int i = 0; i < liveCount; i++)
+   {
+      string posMark; double profit; bool hasAny;
+      PositionInfo(liveSymbol[i], posMark, profit, hasAny);
+
+      PanelRow(liveRow[i], livePrefix[i] + PadRight(posMark, 6) + FormatProfit(profit, hasAny),
+               liveColor[i]);
+   }
+
+   ChartRedraw();
+}
+
+//+------------------------------------------------------------------+
+// تایمر هر ثانیه است ولی اسکن سنگین فقط هر RefreshSeconds ثانیه اجرا می‌شود.
+// بین آن ها فقط ستون سود و زیان تازه می‌شود تا عدد لحظه ای بماند.
 void OnTimer()
 {
-   RunScan();
+   timerTicks++;
+
+   int period = RefreshSeconds;
+   if(period < 5) period = 5;
+
+   if(timerTicks >= period)
+   {
+      timerTicks = 0;
+      RunScan();
+   }
+   else
+   {
+      RefreshProfits();
+   }
 }
 
 //+------------------------------------------------------------------+
