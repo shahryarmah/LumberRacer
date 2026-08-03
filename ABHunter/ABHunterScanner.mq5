@@ -17,7 +17,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "2.41"
+#property version   "2.42"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
@@ -57,7 +57,7 @@ input PanelCornerMode PanelCorner = PANEL_TOP_RIGHT; // جدول در کدام �
 input int    PanelX            = 70;   // فاصله جدول از لبه انتخاب شده
 input int    PanelY            = 20;   // فاصله جدول از بالا
 input int    PanelWidth        = 400;  // عرض جدول
-input int    NewMarkMinutes    = 45;   // الگوی تازه تا چند دقیقه با * علامت بخورد
+input int    NewMarkMinutes    = 45;   // تا چند دقیقه سن الگو در ستون AGE نوشته شود
 input int    PanelFontSize     = 9;
 input color  PanelTitleColor   = clrWhite;
 input color  PanelTextColor    = clrGainsboro;
@@ -77,7 +77,7 @@ struct ScanRow
    ABState         state;
    bool            hasBreak;
    int             rank;    // هر چه کمتر، مهم تر
-   bool            isNew;   // تازه به لیست اضافه شده
+   string          newMark; // سن الگو به دقیقه، اگر تازه باشد
    string          posMark; // معامله باز روی این نماد
 };
 
@@ -89,7 +89,10 @@ int      scanTFCount = 0;
 string   tfSource = "";
 
 // هر الگو یک بار ثبت می‌شود: هم برای اینکه دوبار نوتیفیکیشن نرود، هم برای
-// اینکه بدانیم چه زمانی اولین بار دیده شده و تا مدتی با * علامت بخورد.
+// اینکه بدانیم چه زمانی اولین بار دیده شده.
+// زمان با TimeLocal گرفته می‌شود نه TimeCurrent: دومی زمان آخرین تیک سرور است
+// و با بازار بسته اصلا جلو نمی‌رود، پس سن همه الگوها صفر می‌ماند و همه برای
+// همیشه «تازه» می‌مانند. مقدار 0 یعنی الگو از قبل وجود داشته (اسکن اول).
 string   seenKeys[];
 datetime seenFirst[];
 int      seenCount = 0;
@@ -298,7 +301,7 @@ int SeenIndex(string key)
    return -1;
 }
 
-int RememberSeen(string key)
+int RememberSeen(string key, bool preExisting)
 {
    // فهرست بی نهایت رشد نکند: نصف قدیمی ها دور ریخته می‌شود
    if(seenCount >= 6000)
@@ -319,7 +322,7 @@ int RememberSeen(string key)
    }
 
    seenKeys[seenCount]  = key;
-   seenFirst[seenCount] = TimeCurrent();
+   seenFirst[seenCount] = preExisting ? 0 : TimeLocal();
    seenCount++;
    return seenCount - 1;
 }
@@ -470,7 +473,8 @@ void RunScan()
 
             if(si < 0)
             {
-               si = RememberSeen(key);
+               // الگوهایی که موقع نصب از قبل روی چارت بودند «تازه» نیستند
+               si = RememberSeen(key, !firstScanDone);
 
                // اولین اسکن فقط ثبت می‌کند، وگرنه لحظه نصب با انبوه
                // اطلاع رسانی از الگوهای قدیمی روبرو می‌شوید
@@ -492,8 +496,15 @@ void RunScan()
             rows[nRows].state    = active[k].state;
             rows[nRows].hasBreak = active[k].hasValidBreak;
             rows[nRows].rank     = rank;
-            rows[nRows].isNew    = (NewMarkMinutes > 0 &&
-                                    (TimeCurrent() - seenFirst[si]) <= NewMarkMinutes * 60);
+            // به جای یک ستاره یکسان، سن الگو نوشته می‌شود تا با یک نگاه معلوم
+            // باشد کدام تازه تر است
+            rows[nRows].newMark = "";
+            if(NewMarkMinutes > 0 && seenFirst[si] > 0)
+            {
+               int ageMin = (int)((TimeLocal() - seenFirst[si]) / 60);
+               if(ageMin <= NewMarkMinutes)
+                  rows[nRows].newMark = IntegerToString(ageMin) + "m";
+            }
             rows[nRows].posMark  = PositionMark(sym);
             nRows++;
          }
@@ -506,7 +517,7 @@ void RunScan()
                  IntegerToString(scanTFCount) + " tf  <- " + tfSource, PanelTitleColor);
    row++;
    PanelRow(row, PadRight("SYMBOL", 11) + PadRight("TF", 5) + PadRight("DIR", 5) +
-                 PadRight("STATE", 7) + PadRight("NEW", 5) + "POS",
+                 PadRight("STATE", 7) + PadRight("AGE", 5) + "POS",
             PanelTitleColor);
    row++;
 
@@ -547,7 +558,7 @@ void RunScan()
                     PadRight(TFToStr(rows[best].tf), 5) +
                     PadRight(dir, 5) +
                     PadRight(st, 7) +
-                    PadRight(rows[best].isNew ? "*" : "", 5) +
+                    PadRight(rows[best].newMark, 5) +
                     rows[best].posMark,
                rows[best].isBull ? PanelBullColor : PanelBearColor);
       row++;
