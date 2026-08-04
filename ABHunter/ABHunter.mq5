@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
-//|                                              ABHunter V2.10.mq5   |
+//|                                            ABHunter.mq5   v2.70   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "2.60"
+#property version   "2.70"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
@@ -55,6 +55,13 @@ input bool   EnableAlerts         = false; // هشدار در لحظات کلی�
 //---- تایمر کندل
 input bool   ShowCandleTimer      = true;      // نمایش زمان باقی مانده تا بسته شدن کندل
 input color  CandleTimerColor     = clrGray;   // رنگ تایمر
+
+//---- الگوهای باطل شده
+// الگوی مرده بی سروصدا حذف نمی‌شود؛ تا انتهای همان روز خاکستری روی چارت
+// می‌ماند و علت ابطالش کنار خط B نوشته می‌شود، تا بشود بررسی کرد که
+// اندیکاتور درست حذفش کرده یا نه.
+input bool   ShowDeadPatterns     = true;      // نمایش الگوهای باطل شده امروز
+input color  DeadPatternColor     = clrGray;   // رنگ الگوی باطل شده
 
 //+------------------------------------------------------------------+
 enum TFCategory { STRUCTURE, TRIGGER, ENTRY, NONE };
@@ -560,6 +567,10 @@ void DrawSwing(SwingAB &s, TFCategory cat, ENUM_TIMEFRAMES tf, color drawColor, 
 
    bool active = (s.state == AB_WAIT_RETRACE || s.state == AB_RETRACED || s.state == AB_BROKEN);
 
+   // الگوی مرده کاملا خاکستری رسم می‌شود تا با الگوهای زنده اشتباه نشود
+   bool dead = (s.state == AB_INVALID || s.state == AB_DONE);
+   if(dead) drawColor = DeadPatternColor;
+
    // --- FVG داخل سویینگ بین idxA و idxB
    if(ShowFVG && (cat == STRUCTURE || cat == TRIGGER))
    {
@@ -709,7 +720,9 @@ void DrawSwing(SwingAB &s, TFCategory cat, ENUM_TIMEFRAMES tf, color drawColor, 
       ObjectCreate(0, stName, OBJ_TEXT, 0, bEnd, s.priceB);
       ObjectSetInteger(0, stName, OBJPROP_COLOR, drawColor);
       ObjectSetInteger(0, stName, OBJPROP_FONTSIZE, 8);
-      ObjectSetString(0, stName, OBJPROP_TEXT, "  " + StateText(s));
+      // برای الگوی مرده، به جای وضعیت، علت ابطال نوشته می‌شود
+      ObjectSetString(0, stName, OBJPROP_TEXT,
+                      "  " + (dead ? DeadReasonText(s.deadReason) : StateText(s)));
    }
 }
 
@@ -719,6 +732,7 @@ void DrawSwing(SwingAB &s, TFCategory cat, ENUM_TIMEFRAMES tf, color drawColor, 
 void MaybeAlert(SwingAB &s, TFCategory cat, ENUM_TIMEFRAMES tf, int rates_total)
 {
    if(!EnableAlerts) return;
+   if(s.state == AB_INVALID || s.state == AB_DONE) return;
 
    int lastClosed = rates_total - 2;
    if(lastClosed < 0) return;
@@ -791,6 +805,9 @@ void ProcessIndicator()
 
    for(int k = 0; k < nKept; k++)
    {
+      bool isDead = (kept[k].state == AB_INVALID || kept[k].state == AB_DONE);
+      if(isDead && !ShowDeadPatterns) continue;
+
       if(fullRedraw || kept[k].live)
          DrawSwing(kept[k], cat, tf, drawColor, tfSecs, rates, rates_total);
 

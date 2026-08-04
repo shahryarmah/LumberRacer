@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                                                ABHunterCore.mqh   |
+//|                                        ABHunterCore.mqh   v2.70   |
 //|                                                                  |
 //| منطق مشترک تشخیص سویینگ و چرخه عمر الگوی ABCD.                   |
 //| هم ABHunter.mq5 (اندیکاتور چارت) و هم ABHunterScanner.mq5           |
@@ -34,7 +34,8 @@ input bool   EnableABCD           = true;  // ردیابی چرخه عمر و ا
 input int    ABCDHistoryBars      = 300;   // تعداد کندل تاریخچه برای ردیابی الگو
 input double RetraceMinPercent    = 20.0;  // حداقل درصد اصلاح از AB
 input double RetraceMaxPercent    = 60.0;  // حداکثر درصد اصلاح (با بادی)
-input int    MinRetraceCandles    = 3;     // حداقل کندل اصلاح، از کندل بعد از B
+input int    BConfirmBars        = 3;     // کندل صفر تا چند کندل بعد، B را تثبیت می‌کند
+input int    MinRetraceCandles    = 3;     // حداقل کندل اصلاح، از کندل بعد از تثبیت B
 input int    MaxRetraceBars       = 24;    // حداکثر کندل از B تا حالا (0 = بی نهایت)
 input int    MaxPatternDays       = 0;     // سقف روز تقویمی (0 = خاموش؛ روی تایم بالا نگذارید)
 input bool   HideCounterABInRetrace = true; // پنهان کردن AB خلاف جهت که خودش اصلاح الگوی بزرگتر است
@@ -79,11 +80,38 @@ enum ABState
    AB_INVALID         // باطل
 };
 
+// چرا الگو باطل شد. روی چارت و در جدول اسکنر نوشته می‌شود تا معلوم باشد
+// اندیکاتور به چه دلیلی الگو را کنار گذاشته و بشود درستی اش را بررسی کرد.
+enum ABDeadReason
+{
+   AB_ALIVE = 0,
+   AB_DEAD_RETRACE,    // بادی اصلاح از RetraceMaxPercent رد شد
+   AB_DEAD_BEARLY,     // B قبل از ثبت یک C معتبر برداشته شد
+   AB_DEAD_CD,         // طول CD (با بادی) از AB بیشتر شد
+   AB_DEAD_EXPIRED,    // از سقف کندل های فاز اصلاح گذشت
+   AB_DEAD_HITA        // قیمت به A رسید — پایان طبیعی، نه خطا
+};
+
+// کد کوتاه برای ستون جدول. عرض جدول نباید زیاد شود، پس حداکثر ۷ کاراکتر.
+string DeadReasonText(ABDeadReason r)
+{
+   switch(r)
+   {
+      case AB_DEAD_RETRACE: return "X >60%";
+      case AB_DEAD_BEARLY:  return "X earlyB";
+      case AB_DEAD_CD:      return "X CD>AB";
+      case AB_DEAD_EXPIRED: return "X old";
+      case AB_DEAD_HITA:    return "DONE";
+   }
+   return "";
+}
+
 // یک سویینگ AB به همراه وضعیت چرخه عمر
 struct SwingAB
 {
    int      idxA;
-   int      idxB;
+   int      idxB;      // کندلی که سطح B روی آن است (ممکن است شدو باشد)
+   int      idxZero;   // «کندل صفر»: آخرین کندل خود لگ
    datetime timeA;
    datetime timeB;
    double   priceA;
@@ -94,9 +122,10 @@ struct SwingAB
 
    ABState  state;
 
-   int      idxC;       // عمیق ترین بدنه اصلاح
+   int      idxC;       // عمیق ترین نقطه اصلاح (با سایه، برای رسم)
    datetime timeC;
    double   priceC;
+   double   priceCBody; // همان نقطه ولی با بدنه، برای سنجش CD
 
    bool     hasValidBreak; // کندل شکست معتبر تایید شده است
    int      idxBreakFrom;  // اولین کندل شکست (برای کندل مرکب)
@@ -112,6 +141,9 @@ struct SwingAB
    int      idxSignal;  // کندلی که سیگنال ورود داد
    datetime timeSignal;
    double   priceSignal;
+
+   ABDeadReason deadReason;  // اگر باطل شده، چرا
+   datetime     deadTime;    // زمان کندلی که در آن باطل شد
 };
 
 // کندل مرکب از چند کندل متوالی
@@ -345,36 +377,44 @@ int CollectSwings(MqlRates &rates[], int rates_total, int scanFrom, SwingAB &out
             priceA = rates[idxA].high;
          }
 
-         // --- بسط B به جلو، تا اولین اصلاح معنادار.
-         // اصلاح با بادی سنجیده می‌شود، نه با سایه.
-         idxB   = idxA;
-         priceB = isBullish ? rates[idxA].high : rates[idxA].low;
+         // --- کندل صفر و سطح B.
+         //
+         // «کندل صفر» آخرین کندل لگ است که بعد از آن هیچ کندلی بالاتر از آن
+         // (در لگ نزولی: پایین تر از آن) کلوز نداده باشد. تا وقتی کندلی با
+         // کلوز از آن رد شود یعنی ایمپالس ادامه دارد و همان کندل، کندل صفر
+         // جدید می‌شود.
+         //
+         // سطح B افراطی ترین نقطه بین کندل صفر و BConfirmBars کندل بعدش است —
+         // یعنی شدویی که در این پنجره از کندل صفر رد شود B را جابجا می‌کند،
+         // ولی بعد از این پنجره B قفل است.
+         //
+         // این جای منطق قبلی را می‌گیرد که B را تا «اولین اصلاح ۲۰ درصدی با
+         // بادی» جلو می‌برد. آن اشتباه بود: درصد اصلاح مربوط به نقطه C و اعتبار
+         // کل الگوست و هیچ ربطی به جای B ندارد.
+         int idxZero = idxA;
 
          for(int m = idxA + 1; m < rates_total; m++)
          {
-            if(isBullish)
-            {
-               if(rates[m].high > priceB) { priceB = rates[m].high; idxB = m; continue; }
-               double swing = priceB - priceA;
-               if(swing > 0.0)
-               {
-                  double bodyLow = MathMin(rates[m].open, rates[m].close);
-                  if((priceB - bodyLow) >= swing * RetraceMinPercent / 100.0) break;
-               }
-            }
-            else
-            {
-               if(rates[m].low < priceB) { priceB = rates[m].low; idxB = m; continue; }
-               double swing = priceA - priceB;
-               if(swing > 0.0)
-               {
-                  double bodyHigh = MathMax(rates[m].open, rates[m].close);
-                  if((bodyHigh - priceB) >= swing * RetraceMinPercent / 100.0) break;
-               }
-            }
+            bool closedBeyond = isBullish ? (rates[m].close > rates[idxZero].high)
+                                          : (rates[m].close < rates[idxZero].low);
+            if(closedBeyond) { idxZero = m; continue; }
+
+            if(m - idxZero >= BConfirmBars) break;   // کندل صفر قطعی شد
          }
 
-         if(idxA == idxB) continue;
+         if(idxA >= idxZero) continue;
+
+         int bWindowEnd = idxZero + BConfirmBars;
+         if(bWindowEnd > rates_total - 1) bWindowEnd = rates_total - 1;
+
+         idxB   = idxZero;
+         priceB = isBullish ? rates[idxZero].high : rates[idxZero].low;
+
+         for(int m = idxZero + 1; m <= bWindowEnd; m++)
+         {
+            if(isBullish) { if(rates[m].high > priceB) { priceB = rates[m].high; idxB = m; } }
+            else          { if(rates[m].low  < priceB) { priceB = rates[m].low;  idxB = m; } }
+         }
 
          // جلوگیری از AB تو در تو.
          //
@@ -433,12 +473,27 @@ int CollectSwings(MqlRates &rates[], int rates_total, int scanFrom, SwingAB &out
             }
          }
 
+         // --- A روی «اولین کندل هم جهت» لگ.
+         //
+         // بسط بالا تا افراطی ترین نقطه به عقب می‌رود، ولی آن نقطه اغلب روی
+         // کندلی می‌افتد که اصلا جزو لگ نیست — مثلا سقف یک کندل صعودی درست
+         // قبل از یک لگ نزولی. A باید روی اولین کندل هم جهت خود لگ بنشیند.
+         while(idxA < idxZero &&
+               (isBullish ? (rates[idxA].close <= rates[idxA].open)
+                          : (rates[idxA].close >= rates[idxA].open))) idxA++;
+
+         priceA = isBullish ? rates[idxA].low : rates[idxA].high;
+
+         // اعتبارسنجی روی [idxA, idxZero] است نه [idxA, idxB]: کندل هایی که
+         // فقط با شدو B را جابجا کرده اند جزو خود لگ نیستند و نباید به عنوان
+         // کندل مخالف شمرده شوند.
+         //
          // نامزد اول: A روی مبدا واقعی. اگر لگ از آنجا تمیز نبود، همان A
          // کوتاه تر امتحان می‌شود تا هیچ سویینگی نسبت به قبل از دست نرود.
-         if(!ValidateAB(rates, idxA, idxB, priceA, priceB, isBullish))
+         if(!ValidateAB(rates, idxA, idxZero, priceA, priceB, isBullish))
          {
             if(idxA == idxABase) continue;
-            if(!ValidateAB(rates, idxABase, idxB, priceABase, priceB, isBullish)) continue;
+            if(!ValidateAB(rates, idxABase, idxZero, priceABase, priceB, isBullish)) continue;
 
             idxA   = idxABase;
             priceA = priceABase;
@@ -446,17 +501,19 @@ int CollectSwings(MqlRates &rates[], int rates_total, int scanFrom, SwingAB &out
 
          out[cnt].idxA          = idxA;
          out[cnt].idxB          = idxB;
+         out[cnt].idxZero       = idxZero;
          out[cnt].timeA         = rates[idxA].time;
          out[cnt].timeB         = rates[idxB].time;
          out[cnt].priceA        = priceA;
          out[cnt].priceB        = priceB;
          out[cnt].isBull        = isBullish;
          out[cnt].size          = MathAbs(priceB - priceA);
-         out[cnt].live          = (idxB == rates_total - 1);
+         out[cnt].live          = ((rates_total - 1 - idxZero) < BConfirmBars);
          out[cnt].state         = AB_FORMING;
          out[cnt].idxC          = -1;
          out[cnt].timeC         = 0;
          out[cnt].priceC        = 0.0;
+         out[cnt].priceCBody    = 0.0;
          out[cnt].hasValidBreak = false;
          out[cnt].idxBreakFrom  = -1;
          out[cnt].idxBreakTo    = -1;
@@ -469,6 +526,8 @@ int CollectSwings(MqlRates &rates[], int rates_total, int scanFrom, SwingAB &out
          out[cnt].idxSignal     = -1;
          out[cnt].timeSignal    = 0;
          out[cnt].priceSignal   = 0.0;
+         out[cnt].deadReason    = AB_ALIVE;
+         out[cnt].deadTime      = 0;
          cnt++;
 
          lastAcceptedA = idxA;
@@ -544,6 +603,16 @@ bool IsValidBreak(Composite &c, bool isBull, double bLevel, double abSize, doubl
 }
 
 //+------------------------------------------------------------------+
+// باطل کردن با ثبت علت. الگوی مرده بی سروصدا حذف نمی‌شود؛ خاکستری روی چارت
+// و در جدول می‌ماند تا بشود بررسی کرد که درست حذف شده یا نه.
+void KillSwing(SwingAB &s, ABDeadReason why, datetime when)
+{
+   s.state      = AB_INVALID;
+   s.deadReason = why;
+   s.deadTime   = when;
+}
+
+//+------------------------------------------------------------------+
 // بازپخش چرخه عمر یک AB از کندل بعد از B تا کندل جاری.
 // وضعیت کاملا از روی قیمت بازسازی می‌شود، پس نیازی به ذخیره سازی حالت نیست.
 void EvaluateLifecycle(SwingAB &s, MqlRates &rates[], int rates_total, double avgRange)
@@ -567,9 +636,14 @@ void EvaluateLifecycle(SwingAB &s, MqlRates &rates[], int rates_total, double av
    //   کف/سقف واقعی اصلاح است نه انتهای بدنه.
    double deepestBody = s.priceB;
    double deepestWick = s.priceB;
+   double bodyD       = s.priceB;   // انتهای بدنه در سمت نفوذ، برای سنجش CD
+
+   // اصلاح BC از کندل بعد از پنجره تثبیت B شمرده می‌شود. کندل های ۱ تا ۳ خودشان
+   // در تعیین سطح B نقش داشتند، پس نقطه C نباید روی آنها بنشیند.
+   int bLocked = s.idxZero + BConfirmBars;
 
    // فقط کندل های بسته شده بررسی می‌شوند تا وضعیت وسط کندل repaint نشود.
-   for(int m = s.idxB + 1; m <= rates_total - 2; m++)
+   for(int m = bLocked + 1; m <= rates_total - 2; m++)
    {
       // ردیابی اصلاح تا لحظه شکست B ادامه دارد، نه فقط تا وقتی معتبر شود.
       if(s.state == AB_WAIT_RETRACE || s.state == AB_RETRACED)
@@ -586,9 +660,9 @@ void EvaluateLifecycle(SwingAB &s, MqlRates &rates[], int rates_total, double av
          // های بالا خودش را می‌خورد: روی H8 فقط ۳ کندل در روز هست، و AB به
          // علاوه اصلاح از یک روز بیشتر طول می‌کشد — یعنی هیچ الگویی هرگز به
          // C نمی‌رسید. سقف کندلی خودبه‌خود با تایم فریم مقیاس می‌گیرد.
-         if(MaxRetraceBars > 0 && (m - s.idxB) > MaxRetraceBars)
+         if(MaxRetraceBars > 0 && (m - bLocked) > MaxRetraceBars)
          {
-            s.state = AB_INVALID;
+            KillSwing(s, AB_DEAD_EXPIRED, rates[m].time);
             return;
          }
 
@@ -596,7 +670,7 @@ void EvaluateLifecycle(SwingAB &s, MqlRates &rates[], int rates_total, double av
          if(MaxPatternDays > 0 &&
             ((long)rates[m].time / 86400 - (long)s.timeB / 86400) >= MaxPatternDays)
          {
-            s.state = AB_INVALID;
+            KillSwing(s, AB_DEAD_EXPIRED, rates[m].time);
             return;
          }
 
@@ -609,16 +683,17 @@ void EvaluateLifecycle(SwingAB &s, MqlRates &rates[], int rates_total, double av
 
          if(s.isBull ? (wickExt < deepestWick) : (wickExt > deepestWick))
          {
-            deepestWick = wickExt;
-            s.idxC      = m;
-            s.timeC     = rates[m].time;
-            s.priceC    = wickExt;
+            deepestWick   = wickExt;
+            s.idxC        = m;
+            s.timeC       = rates[m].time;
+            s.priceC      = wickExt;
+            s.priceCBody  = deepestBody;   // همان C ولی با بدنه، برای سنجش CD
          }
 
          bool bodyBeyondMax = s.isBull ? (bodyExt < levelMax) : (bodyExt > levelMax);
          if(bodyBeyondMax)
          {
-            s.state = AB_INVALID;
+            KillSwing(s, AB_DEAD_RETRACE, rates[m].time);
             return;
          }
 
@@ -626,30 +701,28 @@ void EvaluateLifecycle(SwingAB &s, MqlRates &rates[], int rates_total, double av
          {
             bool retraceDeepEnough = s.isBull ? (deepestBody <= levelMin) : (deepestBody >= levelMin);
 
-            // «حداقل 3 کندل اصلاح» یعنی خود نقطه C حداقل 3 کندل بعد از B باشد،
-            // نه اینکه فقط 3 کندل از B گذشته باشد.
-            bool enoughCandles = (s.idxC >= 0 && (s.idxC - s.idxB) >= MinRetraceCandles);
+            // «حداقل MinRetraceCandles کندل استراحت» از کندل بعد از تثبیت B
+            // شمرده می‌شود، یعنی از کندل ۴ بعد از کندل صفر.
+            //
+            // ملاک، تعداد کندل سپری شده در فاز اصلاح است نه جای خود C. اگر
+            // اصلاح در همان کندل اول به عمیق ترین نقطه اش برسد و بعد چند کندل
+            // بخوابد، استراحت انجام شده — با ملاک قرار دادن جای C آن حالت
+            // هیچ وقت تایید نمی‌شد.
+            bool enoughCandles = (s.idxC >= 0 && (m - bLocked) >= MinRetraceCandles);
+
+            // اصلاح معتبر یعنی هر دو با هم: عمق کافی و استراحت کافی
+            bool retraceValid = (retraceDeepEnough && enoughCandles);
 
             bool touchedB = s.isBull ? (rates[m].high > s.priceB) : (rates[m].low < s.priceB);
 
-            // باطل فقط وقتی که B برداشته شود و اصلاح اصلا به عمق ۲۰ درصد
-            // نرسیده باشد. کوتاه بودن اصلاح (کمتر از MinRetraceCandles کندل)
-            // الگو را باطل نمی‌کند — آن شرط برای «تایید C» است و در فهرست
-            // شرط های ابطال نیست.
-            //
-            // قبلا هر دو با هم شرط ابطال بودند، و اصلاحی که به اندازه کافی
-            // عمیق بود ولی در دو کندل جمع می‌شد باعث می‌شد الگو موقع هانت
-            // شدن به جای HUNT کلا حذف شود.
-            if(touchedB && !retraceDeepEnough)
+            // باطل: B برداشته شود بدون اینکه C معتبری ثبت شده باشد
+            if(touchedB && !retraceValid)
             {
-               s.state = AB_INVALID;
+               KillSwing(s, AB_DEAD_BEARLY, rates[m].time);
                return;
             }
 
-            // اگر B همین حالا برداشته شد، اصلاح هر چه بوده تمام شده است؛
-            // پس حتی اگر به MinRetraceCandles نرسیده باشد C همانجا ثبت
-            // می‌شود تا شکست در ادامه به عنوان هانت شمرده شود.
-            if(retraceDeepEnough && (enoughCandles || touchedB))
+            if(retraceValid)
                s.state = AB_RETRACED;
             else
                continue;
@@ -667,6 +740,8 @@ void EvaluateLifecycle(SwingAB &s, MqlRates &rates[], int rates_total, double av
          s.idxHunt  = m;
          s.timeHunt = rates[m].time;
          s.priceD   = s.isBull ? rates[m].high : rates[m].low;
+         bodyD      = s.isBull ? MathMax(rates[m].open, rates[m].close)
+                               : MathMin(rates[m].open, rates[m].close);
       }
 
       if(s.state == AB_BROKEN)
@@ -674,10 +749,18 @@ void EvaluateLifecycle(SwingAB &s, MqlRates &rates[], int rates_total, double av
          if(s.isBull) { if(rates[m].high > s.priceD) s.priceD = rates[m].high; }
          else         { if(rates[m].low  < s.priceD) s.priceD = rates[m].low;  }
 
-         // باطل: CD بزرگتر از AB شود
-         if(MathAbs(s.priceD - s.priceC) > s.size)
+         // انتهای بدنه در سمت نفوذ — مبنای سنجش طول CD
+         double bodyEnd = s.isBull ? MathMax(rates[m].open, rates[m].close)
+                                   : MathMin(rates[m].open, rates[m].close);
+         if(s.isBull) { if(bodyEnd > bodyD) bodyD = bodyEnd; }
+         else         { if(bodyEnd < bodyD) bodyD = bodyEnd; }
+
+         // باطل: CD بزرگتر از AB شود.
+         // هر دو سر با بدنه سنجیده می‌شوند، نه با سایه — یک شدوی بلند نباید
+         // الگویی را بکشد که با بدنه اصلا به طول AB نرسیده.
+         if(MathAbs(bodyD - s.priceCBody) > s.size)
          {
-            s.state = AB_INVALID;
+            KillSwing(s, AB_DEAD_CD, rates[m].time);
             return;
          }
 
@@ -720,7 +803,9 @@ void EvaluateLifecycle(SwingAB &s, MqlRates &rates[], int rates_total, double av
          bool reachedA = s.isBull ? (rates[m].low <= s.priceA) : (rates[m].high >= s.priceA);
          if(reachedA)
          {
-            s.state = AB_DONE;
+            s.state      = AB_DONE;
+            s.deadReason = AB_DEAD_HITA;
+            s.deadTime   = rates[m].time;
             return;
          }
       }
@@ -763,7 +848,7 @@ void EvaluateLifecycle(SwingAB &s, MqlRates &rates[], int rates_total, double av
             }
             else
             {
-               s.state = AB_INVALID;
+               KillSwing(s, AB_DEAD_BEARLY, rates[last].time);
             }
          }
       }
@@ -791,9 +876,22 @@ int ReduceSwings(SwingAB &src[], int n, SwingAB &dst[])
 }
 
 //+------------------------------------------------------------------+
+// آیا این الگوی مرده هنوز باید نشان داده شود؟
+// الگوی باطل بی سروصدا حذف نمی‌شود؛ تا انتهای همان روزی که مرده، خاکستری
+// می‌ماند تا بشود بررسی کرد که درست حذف شده یا نه.
+bool DeadStillVisible(SwingAB &s, MqlRates &rates[], int rates_total)
+{
+   if(s.deadTime == 0 || rates_total <= 0) return false;
+
+   long dayDead = (long)s.deadTime / 86400;
+   long dayNow  = (long)rates[rates_total - 1].time / 86400;
+   return (dayNow == dayDead);
+}
+
+//+------------------------------------------------------------------+
 // از سویینگ های خام، فهرست الگوهای «فعال» را می‌سازد:
-// چرخه عمر را بازپخش می‌کند، باطل و تمام شده ها را حذف می‌کند، و لگ های
-// اصلاحی خلاف جهت را کنار می‌گذارد.
+// چرخه عمر را بازپخش می‌کند، لگ های اصلاحی خلاف جهت را کنار می‌گذارد، و
+// الگوهای مرده امروز را برای بازرسی نگه می‌دارد.
 int BuildActiveSwings(MqlRates &rates[], int rates_total, double avgRange,
                       SwingAB &raw[], int nRaw, SwingAB &out[],
                       bool keepOnlyLast, bool showPrevious)
@@ -808,7 +906,7 @@ int BuildActiveSwings(MqlRates &rates[], int rates_total, double avgRange,
          EvaluateLifecycle(raw[k], rates, rates_total, avgRange);
 
          if(raw[k].state == AB_INVALID || raw[k].state == AB_DONE)
-            continue;
+            if(!DeadStillVisible(raw[k], rates, rates_total)) continue;
 
          out[nKept] = raw[k];
          nKept++;
@@ -833,6 +931,7 @@ int BuildActiveSwings(MqlRates &rates[], int rates_total, double avgRange,
                if(j == k) continue;
                if(out[j].isBull == out[k].isBull) continue;
                if(out[j].state != AB_WAIT_RETRACE && out[j].state != AB_RETRACED) continue;
+               if(out[j].deadReason != AB_ALIVE) continue;
 
                if(out[k].idxA >= out[j].idxB)
                {

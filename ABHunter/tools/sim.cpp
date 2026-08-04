@@ -127,9 +127,10 @@ static void Run(const char *title)
    printf("  BuildActiveSwings -> %d\n", nAct);
 
    for(int k = 0; k < nAct; k++)
-      printf("    act[%d] %s A=%d B=%d state=%s C=%d\n",
-             k, act[k].isBull ? "BULL" : "BEAR", act[k].idxA, act[k].idxB,
-             StateName(act[k].state), act[k].idxC);
+      printf("    act[%d] %s A=%d Z=%d B=%d state=%-7s C=%-3d %s\n",
+             k, act[k].isBull ? "BULL" : "BEAR", act[k].idxA, act[k].idxZero,
+             act[k].idxB, StateName(act[k].state), act[k].idxC,
+             DeadReasonText(act[k].deadReason).c_str());
 
    // why did a raw swing die?
    for(int k = 0; k < nRaw; k++)
@@ -217,7 +218,7 @@ int main()
       double bLevel = px;
       for(int i = 0; i < 2; i++) Impulse(px, 0.00200, 0.00020, false);
       Bar(px, bLevel + 0.00060, px - 0.00020, bLevel + 0.00040);
-      Run("B taken after a 2-bar retracement (must be HUNT, not deleted)");
+      Run("B taken after a 2-bar retracement -> invalid, C needs 3 bars");
    }
 
    // --- 7: deep but SHORT retracement (2 bars), then B hunted.
@@ -231,7 +232,7 @@ int main()
       Impulse(px, 0.00250, 0.00020, false);        // 2-bar retrace, ~48% - deep enough
       Impulse(px, 0.00250, 0.00020, false);
       Bar(px, bLevel + 0.00060, px - 0.00020, bLevel + 0.00040);        // live bar takes B
-      Run("deep but 2-bar retracement, then B hunted");
+      Run("deep but 2-bar retracement -> invalid, rest is too short");
    }
 
    // --- 8: a pullback under 20% is not a retracement at all -- B simply
@@ -263,6 +264,48 @@ int main()
       printf("\n  (MaxRetraceBars = %d, bars after B = %d)\n",
              MaxRetraceBars, (int)g_bars.size() - 1 - 10);
       Run("hunt at bar B+22, then 10 more bars");
+   }
+
+   // --- 10: A must sit on the first SAME-DIRECTION candle of the leg.
+   //     A bullish spike makes the highest high right before a bearish leg;
+   //     A belongs on the first bearish candle, not on that spike.
+   {
+      g_bars.clear();
+      double px = 1.00000;
+      for(int i = 0; i < 6; i++) Flat(px, 0.00020);
+      Impulse(px, 0.00300, 0.00080, true);          // spike up - highest high
+      double spikeHigh = px + 0.00080;
+      for(int i = 0; i < 5; i++) Impulse(px, 0.00200, 0.00020, false);   // the leg
+      for(int i = 0; i < 6; i++) Impulse(px, 0.00080, 0.00015, true);    // retrace
+      printf("\n  (spike high = %.5f, first bearish candle high = %.5f)\n",
+             spikeHigh, spikeHigh - 0.00080);
+      Run("A on the first same-direction candle, not the spike");
+   }
+
+   // --- 11: within the 3-bar window a wick pierces candle 0 -> B moves there
+   {
+      g_bars.clear();
+      double px = 1.00000;
+      for(int i = 0; i < 6; i++) Flat(px, 0.00020);
+      for(int i = 0; i < 5; i++) Impulse(px, 0.00200, 0.00020, true);
+      double h0 = px + 0.00020;                      // candle 0 high
+      Bar(px, h0 + 0.00050, px - 0.00100, px - 0.00090);   // wick above, closes below
+      px -= 0.00090;
+      for(int i = 0; i < 6; i++) Impulse(px, 0.00080, 0.00015, false);
+      printf("\n  (candle0 high = %.5f, piercing wick = %.5f)\n", h0, h0 + 0.00050);
+      Run("wick pierces candle 0 inside the window -> B moves to the wick");
+   }
+
+   // --- 12: a body close beyond candle 0 restarts the window
+   {
+      g_bars.clear();
+      double px = 1.00000;
+      for(int i = 0; i < 6; i++) Flat(px, 0.00020);
+      for(int i = 0; i < 5; i++) Impulse(px, 0.00200, 0.00020, true);
+      Impulse(px, 0.00050, 0.00010, false);          // candle 1, small pullback
+      Impulse(px, 0.00250, 0.00020, true);           // candle 2 closes above candle 0
+      for(int i = 0; i < 6; i++) Impulse(px, 0.00080, 0.00015, false);
+      Run("body close beyond candle 0 restarts the window");
    }
 
    return 0;

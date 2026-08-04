@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                                            ABHunterScanner.mq5   |
+//|                                     ABHunterScanner.mq5   v2.70   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
@@ -17,7 +17,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "2.60"
+#property version   "2.70"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
@@ -92,6 +92,7 @@ struct ScanRow
    int             groupRank;  // بهترین رتبه همین نماد
    string          newMark;    // سن الگو به دقیقه، اگر تازه باشد
    string          key;        // شناسه یکتای الگو
+   ABDeadReason    dead;       // AB_ALIVE یعنی زنده
    datetime        goneAt;     // 0 یعنی زنده؛ وگرنه لحظه ای که از لیست افتاد
 };
 
@@ -173,6 +174,7 @@ int MaxRowsThatFit()
 // هر چه رتبه کمتر، الگو به معامله نزدیک تر.
 int StateRank(SwingAB &s)
 {
+   if(s.state == AB_INVALID || s.state == AB_DONE) return 5;   // مرده، ته جدول
    if(s.state == AB_BROKEN)       return s.hasValidBreak ? 0 : 1;
    if(s.state == AB_RETRACED)     return 2;
    if(s.state == AB_WAIT_RETRACE) return 3;
@@ -182,6 +184,7 @@ int StateRank(SwingAB &s)
 // rank: 0 = BREAK، 1 = HUNT، 2 = C ok، 3 = WAIT
 bool PassesFilter(int rank, PanelFilterMode mode)
 {
+   if(rank >= 5)               return true;   // مرده: فیلتر وضعیت شاملش نمی‌شود
    if(mode == FILTER_ALL)      return true;
    if(mode == FILTER_COK_ONLY) return (rank == 2);
    return (rank >= 2);   // FILTER_PRE_HUNT: فقط C ok و WAIT
@@ -567,6 +570,7 @@ string HeaderText()
 
 string StateTextOf(ScanRow &r)
 {
+   if(r.dead != AB_ALIVE)     return DeadReasonText(r.dead);
    if(r.state == AB_BROKEN)   return r.hasBreak ? "BREAK" : "HUNT";
    if(r.state == AB_RETRACED) return "C ok";
    return "WAIT";
@@ -619,7 +623,7 @@ void DrawDataRow(ScanRow &r, int row, string symCell, string tfCell,
                    PadRight(StateTextOf(r), 7) +
                    PadRight(r.newMark, 5);
 
-   color rowColor = (r.goneAt > 0)
+   color rowColor = (r.goneAt > 0 || r.dead != AB_ALIVE)
                        ? PanelExpiredColor
                        : (r.isBull ? PanelBullColor : PanelBearColor);
 
@@ -653,6 +657,7 @@ void SortRows(ScanRow &r[], int n)
       for(int j = 0; j < n; j++)
          if(r[j].symIndex == r[i].symIndex &&
             (r[j].goneAt > 0) == (r[i].goneAt > 0) &&
+            (r[j].dead != AB_ALIVE) == (r[i].dead != AB_ALIVE) &&
             r[j].rank < best) best = r[j].rank;
       r[i].groupRank = best;
    }
@@ -664,7 +669,8 @@ void SortRows(ScanRow &r[], int n)
       for(int j = i + 1; j < n; j++)
       {
          // خاکستری ها همیشه پایین جدول
-         bool fadeJ = (r[j].goneAt > 0), fadeB = (r[best].goneAt > 0);
+         bool fadeJ = (r[j].goneAt > 0 || r[j].dead != AB_ALIVE);
+         bool fadeB = (r[best].goneAt > 0 || r[best].dead != AB_ALIVE);
          if(fadeJ != fadeB)
          {
             if(!fadeJ) best = j;
@@ -766,8 +772,8 @@ void UpdateGoneList(ScanRow &cur[], int nCur, ScanRow &all[], int nAll)
    // هر چه در اسکن قبل بود و حالا نیست، مهلت خاکستری می‌گیرد
    for(int i = 0; i < lastLiveCount; i++)
    {
-      // ردیفی که قبلا خودش خاکستریِ «تازه هانت شده» بوده، مهلت دومی نمی‌گیرد
-      if(lastLive[i].goneAt > 0) continue;
+      // ردیفی که خودش با علت ابطال خاکستری شده، مهلت دوم نمی‌گیرد
+      if(lastLive[i].goneAt > 0 || lastLive[i].dead != AB_ALIVE) continue;
 
       bool stillHere = false;
       for(int j = 0; j < nCur; j++)
@@ -857,7 +863,8 @@ void DrawPanel()
       int grp = 1;
       while(i + grp < panelRowCount &&
             panelRows[i + grp].symbol == panelRows[i].symbol &&
-            (panelRows[i + grp].goneAt > 0) == (panelRows[i].goneAt > 0)) grp++;
+            (panelRows[i + grp].goneAt > 0) == (panelRows[i].goneAt > 0) &&
+            (panelRows[i + grp].dead != AB_ALIVE) == (panelRows[i].dead != AB_ALIVE)) grp++;
 
       if(!GroupBySymbol || grp == 1)
       {
@@ -975,6 +982,7 @@ void RunScan()
             // به عنوان WAIT دیده شده بود و بعدا هانت می‌شد هیچ وقت خبر دومی
             // نمی‌داد — یعنی مهم ترین لحظه بی صدا می‌گذشت.
             bool notify = false;
+            bool isDead = (active[k].state == AB_INVALID || active[k].state == AB_DONE);
 
             if(seenIdx < 0)
             {
@@ -994,7 +1002,8 @@ void RunScan()
                notify = true;
             }
 
-            if(notify && firstScanDone && EnablePush &&
+            // الگوی مرده فقط برای بازرسی در جدول می‌ماند؛ خبر نمی‌دهد
+            if(notify && !isDead && firstScanDone && EnablePush &&
                PassesFilter(rank, NotifyFilter))
             {
                SendNotification("ABHunter " + sym + " " + TFToStr(tf) + " " +
@@ -1017,6 +1026,7 @@ void RunScan()
             rows[nRows].rank      = rank;
             rows[nRows].groupRank = rank;
             rows[nRows].key       = key;
+            rows[nRows].dead      = active[k].deadReason;
 
             // خاکستری فقط برای الگویی است که واقعا مرده (باطل یا تمام شده) و
             // در UpdateGoneList ثبت می‌شود. الگوی هانت شده زنده است و ردیف
