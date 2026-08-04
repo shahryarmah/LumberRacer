@@ -17,7 +17,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "2.55"
+#property version   "2.56"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
@@ -43,7 +43,7 @@ enum PanelFilterMode
 //---- دامنه اسکن
 input string ScanSymbols       = "XAUUSD,DJIUSD,BRNUSD,SPXUSD,NDXUSD,NZDJPY,USDCAD,USDCHF,USDJPY,GBPCHF,GBPJPY,GBPNZD,GBPUSD,EURJPY,EURNZD,EURUSD,GBPAUD,GBPCAD,CHFJPY,EURAUD,EURCAD,EURCHF,EURGBP,AUDCAD,AUDJPY,AUDUSD,CADCHF,CADJPY"; // نمادها با کاما؛ خالی یعنی همه Market Watch
 input bool   ScanAllMarketWatch = false; // اگر ScanSymbols خالی بود، همه Market Watch اسکن شود
-input string ScanTimeframes    = "H4,H3,H2,H1,M30,M20,M15"; // تایم فریم ها با کاما
+input string ScanTimeframes    = "H8,H4,H3,H2,H1,M30,M20,M15"; // تایم فریم ها با کاما
 input bool   SyncTFWithChart   = false;// به جای فهرست بالا، سه تایم فریم دکمه های چارت خوانده شود
 input int    RefreshSeconds    = 60;   // فاصله هر اسکن کامل (ثانیه)؛ شمارش معکوس در سربرگ دیده می‌شود
 
@@ -59,7 +59,7 @@ input int    PanelY            = 20;   // فاصله جدول از بالا
 input int    PanelWidth        = 470;  // عرض جدول
 input int    NewMarkMinutes    = 45;   // تا چند دقیقه سن الگو در ستون AGE نوشته شود
 input bool   PersistAge        = true; // سن الگوها بین تعویض پروفایل و ری استارت حفظ شود
-input int    ExpiredKeepSeconds = 60;  // الگوی حذف شده چند ثانیه خاکستری در انتهای جدول بماند
+input int    ExpiredKeepSeconds = 0;   // 0 = یک کندل همان تایم فریم، >0 = ثانیه ثابت، منفی = خاموش
 input int    PanelFontSize     = 9;
 input color  PanelTitleColor   = clrWhite;
 input color  PanelTextColor    = clrGainsboro;
@@ -608,9 +608,20 @@ void SortRows(ScanRow &r[], int n)
 //+------------------------------------------------------------------+
 // الگویی که از فهرست می‌افتد بلافاصله ناپدید نمی‌شود: مدتی خاکستری در انتهای
 // جدول می‌ماند تا معلوم باشد چه چیزی اعتبارش تمام شده.
+// چقدر خاکستری بماند. پیش فرض «یک کندل همان تایم فریم» است: روی H8 هشت
+// ساعت، روی H1 یک ساعت. یک عدد ثابت برای همه تایم فریم ها معنی ندارد —
+// شصت ثانیه روی H8 یعنی عملا ندیدنش.
+int ExpirySeconds(ENUM_TIMEFRAMES tf)
+{
+   if(ExpiredKeepSeconds > 0) return ExpiredKeepSeconds;
+
+   int p = PeriodSeconds(tf);
+   return (p > 0) ? p : 60;
+}
+
 bool PruneGone()
 {
-   if(ExpiredKeepSeconds <= 0)
+   if(ExpiredKeepSeconds < 0)
    {
       bool had = (goneCount > 0);
       goneCount = 0;
@@ -622,7 +633,7 @@ bool PruneGone()
 
    for(int g = goneCount - 1; g >= 0; g--)
    {
-      if((now - goneRows[g].goneAt) < ExpiredKeepSeconds) continue;
+      if((now - goneRows[g].goneAt) < ExpirySeconds(goneRows[g].tf)) continue;
 
       for(int k = g; k < goneCount - 1; k++) goneRows[k] = goneRows[k + 1];
       goneCount--;
@@ -632,7 +643,12 @@ bool PruneGone()
    return changed;
 }
 
-void UpdateGoneList(ScanRow &cur[], int nCur)
+// cur = ردیف هایی که از فیلتر جدول رد شده اند.
+// all = همه الگوهای این اسکن، حتی آنهایی که فیلتر نشدند. لازم است چون الگویی
+//       که هانت می‌شود از جدول می‌افتد ولی هنوز وجود دارد، و ردیف خاکستری
+//       باید وضعیت تازه اش (HUNT) را بنویسد نه وضعیت کهنه ای که آخرین بار
+//       در جدول دیده شده بود.
+void UpdateGoneList(ScanRow &cur[], int nCur, ScanRow &all[], int nAll)
 {
    datetime now = TimeLocal();
 
@@ -651,7 +667,7 @@ void UpdateGoneList(ScanRow &cur[], int nCur)
 
    PruneGone();
 
-   if(ExpiredKeepSeconds <= 0) return;
+   if(ExpiredKeepSeconds < 0) return;
 
    // هر چه در اسکن قبل بود و حالا نیست، مهلت خاکستری می‌گیرد
    for(int i = 0; i < lastLiveCount; i++)
@@ -668,7 +684,15 @@ void UpdateGoneList(ScanRow &cur[], int nCur)
 
       if(goneCount >= ArraySize(goneRows)) ArrayResize(goneRows, goneCount + 64);
 
-      goneRows[goneCount]         = lastLive[i];
+      // اگر الگو هنوز وجود دارد و فقط از فیلتر افتاده، وضعیت تازه اش نوشته
+      // می‌شود؛ اگر کلا باطل شده، آخرین وضعیت شناخته شده می‌ماند.
+      int a = -1;
+      for(int j = 0; j < nAll; j++)
+         if(all[j].key == lastLive[i].key) { a = j; break; }
+
+      if(a >= 0) goneRows[goneCount] = all[a];
+      else       goneRows[goneCount] = lastLive[i];
+
       goneRows[goneCount].goneAt  = now;
       goneRows[goneCount].newMark = "";
       goneCount++;
@@ -849,8 +873,9 @@ void RunScan()
                }
             }
 
-            if(!PassesFilter(rank, PanelFilter)) continue;
-
+            // اینجا فیلتر جدول اعمال نمی‌شود. همه الگوها نگه داشته می‌شوند تا
+            // UpdateGoneList بتواند وضعیت تازه الگویی که از جدول افتاده
+            // (مثلا تازه هانت شده) را بخواند.
             if(nRows >= ArraySize(rows)) ArrayResize(rows, nRows + 256);
 
             rows[nRows].symbol    = sym;
@@ -880,14 +905,26 @@ void RunScan()
       }
    }
 
-   SortRows(rows, nRows);
+   // ردیف های جدول = آنهایی که از فیلتر رد می‌شوند
+   ScanRow live[];
+   ArrayResize(live, nRows + 1);
+   int nLive = 0;
+
+   for(int i = 0; i < nRows; i++)
+   {
+      if(!PassesFilter(rows[i].rank, PanelFilter)) continue;
+      live[nLive] = rows[i];
+      nLive++;
+   }
+
+   SortRows(live, nLive);
 
    // مقایسه با اسکن قبل باید قبل از جایگزینی lastLive انجام شود
-   UpdateGoneList(rows, nRows);
+   UpdateGoneList(live, nLive, rows, nRows);
 
-   ArrayResize(lastLive, nRows + 1);
-   for(int i = 0; i < nRows; i++) lastLive[i] = rows[i];
-   lastLiveCount = nRows;
+   ArrayResize(lastLive, nLive + 1);
+   for(int i = 0; i < nLive; i++) lastLive[i] = live[i];
+   lastLiveCount = nLive;
 
    BuildPanelRows();
    DrawPanel();
