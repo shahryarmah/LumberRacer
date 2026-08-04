@@ -217,7 +217,7 @@ int main()
       double bLevel = px;
       for(int i = 0; i < 2; i++) Impulse(px, 0.00200, 0.00020, false);
       Bar(px, bLevel + 0.00060, px - 0.00020, bLevel + 0.00040);
-      Run("B taken after a 2-bar retracement -> invalid, C needs 3 bars");
+      Run("B taken after a 2-bar retracement (must be HUNT, not deleted)");
    }
 
    // --- 7: deep but SHORT retracement (2 bars), then B hunted.
@@ -231,7 +231,7 @@ int main()
       Impulse(px, 0.00250, 0.00020, false);        // 2-bar retrace, ~48% - deep enough
       Impulse(px, 0.00250, 0.00020, false);
       Bar(px, bLevel + 0.00060, px - 0.00020, bLevel + 0.00040);        // live bar takes B
-      Run("deep but 2-bar retracement -> invalid, rest is too short");
+      Run("deep but 2-bar retracement, then B hunted");
    }
 
    // --- 8: a pullback under 20% is not a retracement at all -- B simply

@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                                        ABHunterCore.mqh   v2.61   |
+//|                                                ABHunterCore.mqh   |
 //|                                                                  |
 //| منطق مشترک تشخیص سویینگ و چرخه عمر الگوی ABCD.                   |
 //| هم ABHunter.mq5 (اندیکاتور چارت) و هم ABHunterScanner.mq5           |
@@ -632,19 +632,24 @@ void EvaluateLifecycle(SwingAB &s, MqlRates &rates[], int rates_total, double av
 
             bool touchedB = s.isBull ? (rates[m].high > s.priceB) : (rates[m].low < s.priceB);
 
-            // اصلاح معتبر یعنی هر دو شرط با هم: هم عمق ≥ RetraceMinPercent و
-            // هم حداقل MinRetraceCandles کندل استراحت. اصلاحی که در یکی دو
-            // کندل جمع شود «استراحت» نیست و C به حساب نمی‌آید.
-            bool retraceValid = (retraceDeepEnough && enoughCandles);
-
-            // باطل: B برداشته شود بدون اینکه اصلاح معتبری ثبت شده باشد
-            if(touchedB && !retraceValid)
+            // باطل فقط وقتی که B برداشته شود و اصلاح اصلا به عمق ۲۰ درصد
+            // نرسیده باشد. کوتاه بودن اصلاح (کمتر از MinRetraceCandles کندل)
+            // الگو را باطل نمی‌کند — آن شرط برای «تایید C» است و در فهرست
+            // شرط های ابطال نیست.
+            //
+            // قبلا هر دو با هم شرط ابطال بودند، و اصلاحی که به اندازه کافی
+            // عمیق بود ولی در دو کندل جمع می‌شد باعث می‌شد الگو موقع هانت
+            // شدن به جای HUNT کلا حذف شود.
+            if(touchedB && !retraceDeepEnough)
             {
                s.state = AB_INVALID;
                return;
             }
 
-            if(retraceValid)
+            // اگر B همین حالا برداشته شد، اصلاح هر چه بوده تمام شده است؛
+            // پس حتی اگر به MinRetraceCandles نرسیده باشد C همانجا ثبت
+            // می‌شود تا شکست در ادامه به عنوان هانت شمرده شود.
+            if(retraceDeepEnough && (enoughCandles || touchedB))
                s.state = AB_RETRACED;
             else
                continue;
@@ -743,14 +748,12 @@ void EvaluateLifecycle(SwingAB &s, MqlRates &rates[], int rates_total, double av
                                   : (rates[last].low  < s.priceB);
          if(crossedB)
          {
-            // همان قاعده حلقه بالا: اصلاح باید هم به عمق ۲۰ درصد رسیده باشد و
-            // هم حداقل MinRetraceCandles کندل طول کشیده باشد.
-            bool retraceValid =
-               (s.state == AB_RETRACED) ||
-               ((s.isBull ? (deepestBody <= levelMin) : (deepestBody >= levelMin)) &&
-                s.idxC >= 0 && (s.idxC - s.idxB) >= MinRetraceCandles);
-
-            if(retraceValid)
+            // همان قاعده حلقه بالا: فقط نرسیدن به عمق ۲۰ درصد الگو را باطل
+            // می‌کند، نه کوتاه بودن اصلاح.
+            bool deepEnough = (s.state == AB_RETRACED) ||
+                              (s.isBull ? (deepestBody <= levelMin)
+                                        : (deepestBody >= levelMin));
+            if(deepEnough)
             {
                // نقدینگی برداشته شد — همان D
                s.state    = AB_BROKEN;
