@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
-//|                                            ABHunter.mq5   v2.71   |
+//|                                            ABHunter.mq5   v2.72   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "2.71"
+#property version   "2.72"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 

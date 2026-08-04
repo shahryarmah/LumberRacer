@@ -308,5 +308,25 @@ int main()
       Run("body close beyond candle 0 restarts the window");
    }
 
+   // --- 13: the whole retracement happens in candles 1-3 and price is already
+   //     back near B by candle 4, which then takes it. Must reach HUNT, not
+   //     "X earlyB" — candles 1-3 are part of the BC correction (NZDJPY M15).
+   {
+      g_bars.clear();
+      double px = 1.00000;
+      for(int i = 0; i < 6; i++) Flat(px, 0.00020);
+      for(int i = 0; i < 5; i++) Impulse(px, 0.00200, 0.00020, true);   // A -> B
+      double bLevel = px + 0.00020;
+      Impulse(px, 0.00250, 0.00020, false);       // candle 1
+      Impulse(px, 0.00200, 0.00020, false);       // candle 2  -> ~43% down
+      double low = px;
+      Impulse(px, 0.00380, 0.00020, true);        // candle 3, back up near B
+      Impulse(px, 0.00300, 0.00020, true);        // candle 4 takes B
+      for(int i = 0; i < 3; i++) Flat(px, 0.00020);
+      printf("\n  (B = %.5f, 20%% level = %.5f, retrace low = %.5f)\n",
+             bLevel, bLevel - 0.00208, low);
+      Run("retracement lives in candles 1-3, B taken at candle 4");
+   }
+
    return 0;
 }
