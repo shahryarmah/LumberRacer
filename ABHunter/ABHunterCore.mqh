@@ -176,7 +176,7 @@ bool ValidateAB(MqlRates &rates[], int idxA, int idxB,
    // این دو یکی نیستند: A تا مبدا حرکت به عقب می‌رود و B تا اولین اصلاح به
    // جلو. بدون این بررسی، شرط «حداقل MinCandles کندل هم جهت» روی خود AB
    // تضمین نمی‌شود و مثلا 2 کندل صعودی با یک کندل مخالف قبول می‌شد.
-   int abBull = 0, abBear = 0, abNonStd = 0;
+   int abBull = 0, abBear = 0;
    int abTotal = idxB - idxA + 1;
 
    // علاوه بر تعداد، حجم بدنه هم شمرده می‌شود: یک کندل مخالف بزرگ حتی اگر
@@ -191,7 +191,6 @@ bool ValidateAB(MqlRates &rates[], int idxA, int idxB,
 
       if(abPct < MinBodyPercent)
       {
-         abNonStd++;
          continue;               // کندل بی بدنه نه هم جهت است نه مخالف
       }
 
@@ -219,10 +218,16 @@ bool ValidateAB(MqlRates &rates[], int idxA, int idxB,
    // سهم مجاز نسبی است، ولی هیچ وقت کمتر از عدد ثابت ورودی نمی‌شود.
    double abShare = abTotal * AbOppositePercent / 100.0;
    int maxOpp     = (int)MathMax((double)MaxOppositeCandles, abShare);
-   int maxNonStd  = (int)MathMax((double)MaxNonStandard,     abShare);
 
-   if(abNonStd > maxNonStd) return false;
-
+   // عمدا سقفی روی تعداد کندل های بی بدنه داخل [idxA, idxB] گذاشته نمی‌شود.
+   // کندل با بدنه کمتر از MinBodyPercent در یک لگ واقعی کاملا عادی است، و
+   // چون A به عقب و B به جلو بسط پیدا می‌کنند این محدوده می‌تواند بلند باشد.
+   // سنجش ۳۹۹۵۲ رد شدن در شبیه ساز (پوشه tools) نشان داد همین شرط به تنهایی
+   // بیشترین سویینگ درست را حذف می‌کرد.
+   //
+   // محافظت لازم از جای دیگر می‌آید و به طول محدوده حساس نیست:
+   //   abBull/abBear >= MinCandles  →  حداقل سه کندل جهت دار واقعی
+   //   مومنتم ۲                      →  بدنه ها باید بخش عمده طول AB را بپوشانند
    if(isBullish) { if(abBull < MinCandles || abBear > maxOpp) return false; }
    else          { if(abBear < MinCandles || abBull > maxOpp) return false; }
 
@@ -298,18 +303,17 @@ int CollectSwings(MqlRates &rates[], int rates_total, int scanFrom, SwingAB &out
             double candleSize = rates[idx].high - rates[idx].low;
             double bodyPercent = (candleSize == 0) ? 0 : (body / candleSize) * 100.0;
 
-            // کندل بدنه کوچک «جهت» ندارد و نباید جای یک کندل هم جهت واقعی را
-            // بگیرد، وگرنه شرط «حداقل MinCandles کندل هم جهت» با کندل های
-            // بی بدنه پر می‌شود.
-            if(bodyPercent < MinBodyPercent)
-            {
-               nonStd++;
-            }
-            else
-            {
-               if(rates[idx].close > rates[idx].open) bullCount++;
-               if(rates[idx].close < rates[idx].open) bearCount++;
-            }
+            // اینجا فقط «دانه» پیدا می‌شود، اعتبارسنجی نیست. پس کندل بدنه کوچک
+            // هم جهتش شمرده می‌شود؛ سخت گیری واقعی در ValidateAB روی محدوده
+            // واقعی [idxA, idxB] انجام می‌شود که آنجا کندل بی بدنه جای کندل
+            // هم جهت را نمی‌گیرد.
+            //
+            // با شمردن نکردن جهت این کندل ها، پنجره تشخیص آنقدر سخت می‌شد که
+            // خیلی از لگ های واقعی اصلا دانه ای برای شروع پیدا نمی‌کردند.
+            if(bodyPercent < MinBodyPercent) nonStd++;
+
+            if(rates[idx].close > rates[idx].open) bullCount++;
+            if(rates[idx].close < rates[idx].open) bearCount++;
          }
 
          if(nonStd > MaxNonStandard) continue;
