@@ -195,5 +195,30 @@ int main()
       Run("long zig-zag, 6 legs");
    }
 
+   // --- 5: B hunted by the still-forming candle (AUDCAD H8 shape)
+   //     valid retracement of 4 bars, then the live bar poking above B
+   {
+      g_bars.clear();
+      double px = 1.00000;
+      for(int i = 0; i < 6; i++) Flat(px, 0.00020);
+      for(int i = 0; i < 5; i++) Impulse(px, 0.00200, 0.00020, true);   // A -> B
+      double bLevel = px;
+      for(int i = 0; i < 4; i++) Impulse(px, 0.00100, 0.00020, false);  // B -> C, 40%
+      Bar(px, bLevel + 0.00060, px - 0.00020, bLevel + 0.00040);        // live bar crosses B
+      Run("B hunted by the unclosed candle");
+   }
+
+   // --- 6: same, but the retracement is only 2 bars -> must invalidate
+   {
+      g_bars.clear();
+      double px = 1.00000;
+      for(int i = 0; i < 6; i++) Flat(px, 0.00020);
+      for(int i = 0; i < 5; i++) Impulse(px, 0.00200, 0.00020, true);
+      double bLevel = px;
+      for(int i = 0; i < 2; i++) Impulse(px, 0.00200, 0.00020, false);
+      Bar(px, bLevel + 0.00060, px - 0.00020, bLevel + 0.00040);
+      Run("B taken with too short a retracement");
+   }
+
    return 0;
 }
