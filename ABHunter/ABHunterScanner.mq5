@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                                     ABHunterScanner.mq5   v2.70   |
+//|                                     ABHunterScanner.mq5   v2.71   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
@@ -17,7 +17,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "2.70"
+#property version   "2.71"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
@@ -102,6 +102,11 @@ int      scanSymbolCount = 0;
 ENUM_TIMEFRAMES scanTFList[];
 int      scanTFCount = 0;
 string   tfSource = "";
+
+// اگر روی چارتی اندیکاتور ABHunter با تنظیمات تشخیص متفاوتی نصب باشد، آن
+// چارت الگوهای دیگری می‌بیند و جدول با چارت نمی‌خواند. اینجا فقط علامت
+// می‌زنیم؛ سربرگ جدول هشدار می‌دهد.
+bool     cfgMismatch = false;
 
 // هر الگو یک بار ثبت می‌شود: هم برای اینکه دوبار نوتیفیکیشن نرود، هم برای
 // اینکه بدانیم چه زمانی اولین بار دیده شده.
@@ -276,6 +281,31 @@ bool ReadTFsFromChart()
    }
 
    return false;
+}
+
+//+------------------------------------------------------------------+
+// آیا اندیکاتور روی چارت های باز با همین تنظیمات تشخیص کار می‌کند؟
+//
+// ورودی های ABHunterCore.mqh مشترک نوشته شده اند ولی متاتریدر برای هر .mq5
+// یک کپی جدا از مقادیرشان نگه می‌دارد. نتیجه اش این است که جدول الگویی را
+// گزارش می‌کند که روی چارت وجود ندارد — و هیچ نشانه ای هم دیده نمی‌شود.
+void CheckConfigMatch()
+{
+   cfgMismatch = false;
+
+   string mine = CoreConfigSignature();
+   long id = ChartFirst();
+
+   while(id >= 0)
+   {
+      string obj = ConfigObjectName(id);
+      if(ObjectFind(id, obj) >= 0 && ObjectGetString(id, obj, OBJPROP_TEXT) != mine)
+      {
+         cfgMismatch = true;
+         return;
+      }
+      id = ChartNext(id);
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -565,7 +595,8 @@ string HeaderText()
    string src = (tfSource == "inputs") ? "" : "  <- " + tfSource;
 
    return "ABHunter" + src +
-          "   next " + TwoDigits(left / 60) + ":" + TwoDigits(left % 60);
+          "   next " + TwoDigits(left / 60) + ":" + TwoDigits(left % 60) +
+          (cfgMismatch ? "   !cfg differs from chart" : "");
 }
 
 string StateTextOf(ScanRow &r)
@@ -939,6 +970,7 @@ void RunScan()
 {
    if(scanSymbolCount == 0) BuildSymbolList();
    BuildTFList();
+   CheckConfigMatch();
 
    ScanRow rows[];
    int nRows = 0;

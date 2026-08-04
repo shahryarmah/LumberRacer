@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                                        ABHunterCore.mqh   v2.70   |
+//|                                        ABHunterCore.mqh   v2.71   |
 //|                                                                  |
 //| منطق مشترک تشخیص سویینگ و چرخه عمر الگوی ABCD.                   |
 //| هم ABHunter.mq5 (اندیکاتور چارت) و هم ABHunterScanner.mq5           |
@@ -59,6 +59,53 @@ ENUM_TIMEFRAMES EntryTFList[9]     = {PERIOD_M15, PERIOD_M12, PERIOD_M10, PERIOD
 string StateObjectName(long chartId)
 {
    return "ABH_State_" + IntegerToString(chartId);
+}
+
+// نام آبجکتی که اندیکاتور چارت اثر انگشت تنظیمات تشخیصش را در آن می‌گذارد.
+string ConfigObjectName(long chartId)
+{
+   return "ABH_Cfg_" + IntegerToString(chartId);
+}
+
+// اثر انگشت همه ورودی هایی که روی تشخیص اثر دارند.
+//
+// این ورودی ها در ABHunterCore.mqh تعریف شده اند ولی متاتریدر برای هر .mq5
+// یک کپی جدا از مقادیرشان نگه می‌دارد. یعنی اسکنر و اندیکاتور چارت می‌توانند
+// بی سروصدا با قواعد متفاوت کار کنند و همین باعث می‌شود جدول الگویی را بگوید
+// که روی چارت نیست. اسکنر این اثر انگشت را با مال خودش مقایسه می‌کند و اگر
+// فرق داشت در سربرگ هشدار می‌دهد.
+string CoreConfigSignature()
+{
+   long h = 0;
+
+   h = h * 31 + MinCandles;
+   h = h * 31 + MaxCandles;
+   h = h * 31 + MaxABSpan;
+   h = h * 31 + MaxOppositeCandles;
+   h = h * 31 + (long)(MinBodyPercent * 10);
+   h = h * 31 + MaxNonStandard;
+   h = h * 31 + (long)(MinABRatio * 10);
+   h = h * 31 + (long)(MaxABRatio * 10);
+   h = h * 31 + (long)(AbOppositePercent * 10);
+   h = h * 31 + (long)(MomentumMinPercent * 10);
+   h = h * 31 + MaxNonProgressive;
+   h = h * 31 + (EnableABCD ? 1 : 0);
+   h = h * 31 + ABCDHistoryBars;
+   h = h * 31 + (long)(RetraceMinPercent * 10);
+   h = h * 31 + (long)(RetraceMaxPercent * 10);
+   h = h * 31 + BConfirmBars;
+   h = h * 31 + MinRetraceCandles;
+   h = h * 31 + MaxRetraceBars;
+   h = h * 31 + MaxPatternDays;
+   h = h * 31 + (HideCounterABInRetrace ? 1 : 0);
+   h = h * 31 + (long)(BreakMinBodyPercent * 10);
+   h = h * 31 + (long)(BreakMaxWickPercent * 10);
+   h = h * 31 + (long)(BreakMinSizeRatio * 10);
+   h = h * 31 + (long)(BreakMinDistancePct * 10);
+   h = h * 31 + BreakMaxCandles;
+
+   if(h < 0) h = -h;
+   return IntegerToString(h % 1000000);
 }
 
 int ClampIdx(int idx, int size)
@@ -701,14 +748,19 @@ void EvaluateLifecycle(SwingAB &s, MqlRates &rates[], int rates_total, double av
          {
             bool retraceDeepEnough = s.isBull ? (deepestBody <= levelMin) : (deepestBody >= levelMin);
 
-            // «حداقل MinRetraceCandles کندل استراحت» از کندل بعد از تثبیت B
-            // شمرده می‌شود، یعنی از کندل ۴ بعد از کندل صفر.
+            // «حداقل MinRetraceCandles کندل استراحت» از خود کندل صفر شمرده
+            // می‌شود، یعنی کندل های ۱، ۲ و ۳ هم جزو استراحت اند.
             //
-            // ملاک، تعداد کندل سپری شده در فاز اصلاح است نه جای خود C. اگر
-            // اصلاح در همان کندل اول به عمیق ترین نقطه اش برسد و بعد چند کندل
-            // بخوابد، استراحت انجام شده — با ملاک قرار دادن جای C آن حالت
-            // هیچ وقت تایید نمی‌شد.
-            bool enoughCandles = (s.idxC >= 0 && (m - bLocked) >= MinRetraceCandles);
+            // طبق جزوه «مادامیکه قیمت بالای B کلوزی انجام نداده، هر کندلی
+            // داریم جزء اصلاح BC محسوب می‌شود» — پس پنجره تثبیت B خودش بخشی
+            // از اصلاح است. آن پنجره فقط تعیین می‌کند که نقطه C کجا می‌تواند
+            // بنشیند (از کندل ۴ به بعد)، نه اینکه شمارش استراحت از آنجا شروع
+            // شود.
+            //
+            // ملاک، تعداد کندل سپری شده است نه جای خود C: اگر اصلاح در همان
+            // کندل اول به عمیق ترین نقطه اش برسد و بعد چند کندل بخوابد،
+            // استراحت انجام شده.
+            bool enoughCandles = (s.idxC >= 0 && (m - s.idxZero) >= MinRetraceCandles);
 
             // اصلاح معتبر یعنی هر دو با هم: عمق کافی و استراحت کافی
             bool retraceValid = (retraceDeepEnough && enoughCandles);

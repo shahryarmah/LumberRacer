@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
-//|                                            ABHunter.mq5   v2.70   |
+//|                                            ABHunter.mq5   v2.71   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "2.70"
+#property version   "2.71"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
@@ -274,6 +274,20 @@ void SaveState()
       }
    }
    ObjectSetString(0, stateObjName, OBJPROP_TEXT, txt);
+
+   // اثر انگشت تنظیمات تشخیص، تا اسکنر بتواند بفهمد با همان قواعد کار می‌کند
+   // یا نه. ورودی های ABHunterCore برای هر نصب جدا ذخیره می‌شوند، پس این دو
+   // می‌توانند بی سروصدا از هم فاصله بگیرند.
+   string cfgName = ConfigObjectName(ChartID());
+   if(ObjectFind(0, cfgName) < 0)
+   {
+      if(ObjectCreate(0, cfgName, OBJ_LABEL, 0, 0, 0))
+      {
+         ObjectSetInteger(0, cfgName, OBJPROP_HIDDEN, true);
+         ObjectSetInteger(0, cfgName, OBJPROP_SELECTABLE, false);
+      }
+   }
+   ObjectSetString(0, cfgName, OBJPROP_TEXT, CoreConfigSignature());
 }
 
 //+------------------------------------------------------------------+
@@ -865,6 +879,7 @@ void OnDeinit(const int reason)
             StringFind(name, "ABH_BtnTrigger_") == 0 ||
             StringFind(name, "ABH_BtnEntry_") == 0 ||
             StringFind(name, "ABH_State_") == 0 ||
+            StringFind(name, "ABH_Cfg_") == 0 ||
             StringFind(name, "ABH_Timer_") == 0)
          {
             ObjectDelete(0, name);
