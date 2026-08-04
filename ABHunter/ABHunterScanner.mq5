@@ -17,7 +17,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "2.58"
+#property version   "2.60"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
@@ -31,8 +31,14 @@ enum PanelCornerMode
 };
 
 //---- کدام وضعیت ها به حساب بیایند.
-// اسکنر باید ستاپ را «قبل از» فعال شدنش نشان دهد تا فرصت رفتن به تایم پایین تر
-// باشد. الگویی که B اش هانت شده دیگر موقعیت ورود نمی‌دهد و فقط شلوغی است.
+//
+// روش فراکتالی است: بعد از هانت شدن B در تایم اصلی، سراغ فراکتال پایین تر
+// (حدود یک شانزدهم) می‌رویم و آنجا منتظر کندل شکست و کندل سیگنال می‌مانیم.
+// پس HUNT و BREAK «شلوغی» نیستند — دقیقا لحظه ای اند که کار شروع می‌شود، و
+// باید تا زنده بودن الگو در جدول بمانند. تشکیل C هم لحظه مهم دیگری است.
+//
+// پیش فرض FILTER_ALL است. دو حالت دیگر برای وقتی است که عمدا بخواهید فقط
+// بخشی از چرخه را ببینید.
 enum PanelFilterMode
 {
    FILTER_PRE_HUNT,   // AB و ABC که B هنوز هانت نشده
@@ -49,10 +55,10 @@ input int    RefreshSeconds    = 60;   // فاصله هر اسکن کامل (ث�
 
 //---- نوتیفیکیشن
 input bool   EnablePush        = true; // نوتیفیکیشن موبایل برای هر AB جدید قطعی شده
-input PanelFilterMode NotifyFilter = FILTER_PRE_HUNT; // برای کدام وضعیت ها اطلاع بدهد
+input PanelFilterMode NotifyFilter = FILTER_ALL;       // برای کدام وضعیت ها اطلاع بدهد
 
 //---- جدول
-input PanelFilterMode PanelFilter = FILTER_PRE_HUNT; // کدام وضعیت ها در جدول بیایند
+input PanelFilterMode PanelFilter = FILTER_ALL;       // کدام وضعیت ها در جدول بیایند
 input PanelCornerMode PanelCorner = PANEL_TOP_RIGHT; // جدول در کدام گوشه باشد
 input int    PanelX            = 70;   // فاصله جدول از لبه انتخاب شده
 input int    PanelY            = 20;   // فاصله جدول از بالا
@@ -70,7 +76,6 @@ input color  PanelBackColor    = clrBlack;
 input color  PanelBorderColor  = clrDimGray; // رنگ قاب جدول
 input int    PanelMaxRows      = 100;  // سقف ردیف؛ به هر حال از ارتفاع چارت بیشتر نمی‌شود
 input bool   GroupBySymbol     = true; // نمادی که در چند تایم فریم الگو دارد یک ردیف کشویی شود
-input int    HuntKeepBars      = 1;    // الگوی تازه هانت شده چند کندل خاکستری در جدول بماند (-1 = هرگز)
 
 //+------------------------------------------------------------------+
 // یک ردیف جدول
@@ -104,6 +109,7 @@ string   tfSource = "";
 // همیشه «تازه» می‌مانند. مقدار 0 یعنی الگو از قبل وجود داشته (اسکن اول).
 string   seenKeys[];
 datetime seenFirst[];
+int      seenRank[];   // آخرین رتبه ای که برایش خبر داده شده
 int      seenCount = 0;
 bool     firstScanDone = false;   // اولین اسکن فقط ثبت می‌کند و اطلاع نمی‌دهد
 
@@ -378,7 +384,7 @@ int SeenIndex(string key)
 // preExisting یعنی این الگو در اولین اسکن این نصب دیده شده و نباید «تازه»
 // شمرده شود. برگشتی: اندیس در seenKeys، و alreadyKnown می‌گوید که آیا این
 // الگو از قبل (در نصب قبلی) هم شناخته شده بود یا واقعا اولین بار است.
-int RememberSeen(string key, string gv, bool preExisting, bool &alreadyKnown)
+int RememberSeen(string key, string gv, bool preExisting, bool &alreadyKnown, int rank)
 {
    alreadyKnown = false;
    datetime first = preExisting ? 0 : TimeLocal();
@@ -402,6 +408,7 @@ int RememberSeen(string key, string gv, bool preExisting, bool &alreadyKnown)
       {
          seenKeys[i]  = seenKeys[seenCount - keep + i];
          seenFirst[i] = seenFirst[seenCount - keep + i];
+         seenRank[i]  = seenRank[seenCount - keep + i];
       }
       seenCount = keep;
    }
@@ -410,10 +417,12 @@ int RememberSeen(string key, string gv, bool preExisting, bool &alreadyKnown)
    {
       ArrayResize(seenKeys,  seenCount + 512);
       ArrayResize(seenFirst, seenCount + 512);
+      ArrayResize(seenRank,  seenCount + 512);
    }
 
    seenKeys[seenCount]  = key;
    seenFirst[seenCount] = first;
+   seenRank[seenCount]  = rank;
    seenCount++;
    return seenCount - 1;
 }
@@ -958,23 +967,39 @@ void RunScan()
 
             int seenIdx = SeenIndex(key);
 
+            // اطلاع رسانی روی «تغییر وضعیت» است، نه فقط اولین رویت.
+            //
+            // rank دقیقا در همان گذارهایی عوض می‌شود که برای شما مهم اند:
+            // WAIT → C ok (الگو آماده شد) و C ok → HUNT → BREAK (وقت رفتن به
+            // فراکتال پایین تر). قبلا فقط اولین رویت خبر می‌داد، پس الگویی که
+            // به عنوان WAIT دیده شده بود و بعدا هانت می‌شد هیچ وقت خبر دومی
+            // نمی‌داد — یعنی مهم ترین لحظه بی صدا می‌گذشت.
+            bool notify = false;
+
             if(seenIdx < 0)
             {
                // الگوهایی که موقع نصب از قبل روی چارت بودند «تازه» نیستند
                bool alreadyKnown = false;
                seenIdx = RememberSeen(key, GVName(sym, tf, active[k].timeA),
-                                      !firstScanDone, alreadyKnown);
+                                      !firstScanDone, alreadyKnown, rank);
 
                // اولین اسکن فقط ثبت می‌کند، وگرنه لحظه نصب با انبوه
                // اطلاع رسانی از الگوهای قدیمی روبرو می‌شوید. الگویی هم که از
                // نصب قبلی شناخته شده بود دوباره اطلاع نمی‌دهد.
-               if(firstScanDone && !alreadyKnown && EnablePush &&
-                  PassesFilter(rank, NotifyFilter))
-               {
-                  SendNotification("ABHunter " + sym + " " + TFToStr(tf) + " " +
-                                   (active[k].isBull ? "BULL" : "BEAR") +
-                                   " " + StateText(active[k]));
-               }
+               notify = (!alreadyKnown);
+            }
+            else if(seenRank[seenIdx] != rank)
+            {
+               seenRank[seenIdx] = rank;
+               notify = true;
+            }
+
+            if(notify && firstScanDone && EnablePush &&
+               PassesFilter(rank, NotifyFilter))
+            {
+               SendNotification("ABHunter " + sym + " " + TFToStr(tf) + " " +
+                                (active[k].isBull ? "BULL" : "BEAR") +
+                                " " + StateText(active[k]));
             }
 
             // اینجا فیلتر جدول اعمال نمی‌شود. همه الگوها نگه داشته می‌شوند تا
@@ -993,22 +1018,10 @@ void RunScan()
             rows[nRows].groupRank = rank;
             rows[nRows].key       = key;
 
-            // الگویی که تازه هانت شده از فیلتر جدول می‌افتد، ولی همان لحظه
-            // مهم ترین لحظه است. پس مستقیما به صورت خاکستری وارد جدول می‌شود
-            // و به اندازه HuntKeepBars کندلِ همان تایم فریم می‌ماند.
-            //
-            // سنجش با «تعداد کندل از هانت» است نه ثانیه، چون خودش با تایم
-            // فریم مقیاس می‌گیرد: روی H8 حدود هشت ساعت، روی M30 نیم ساعت.
-            //
-            // این جدا از سازوکار «ردیف ناپدید شده» است. آن یکی فقط چیزی را
-            // می‌گیرد که قبلا در جدول بوده؛ الگویی که بین دو اسکن یکراست به
-            // HUNT می‌رفت اصلا دیده نمی‌شد.
+            // خاکستری فقط برای الگویی است که واقعا مرده (باطل یا تمام شده) و
+            // در UpdateGoneList ثبت می‌شود. الگوی هانت شده زنده است و ردیف
+            // عادی می‌گیرد.
             rows[nRows].goneAt = 0;
-
-            if(HuntKeepBars >= 0 && active[k].state == AB_BROKEN &&
-               active[k].idxHunt >= 0 &&
-               (rates_total - 1 - active[k].idxHunt) <= HuntKeepBars)
-               rows[nRows].goneAt = 1;   // نشانه «خاکستری»، نه زمان واقعی
 
             // به جای یک ستاره یکسان، سن الگو نوشته می‌شود تا با یک نگاه معلوم
             // باشد کدام تازه تر است
@@ -1032,8 +1045,7 @@ void RunScan()
 
    for(int i = 0; i < nRows; i++)
    {
-      // ردیف خاکستریِ تازه هانت شده مستقل از فیلتر می‌آید
-      if(!PassesFilter(rows[i].rank, PanelFilter) && rows[i].goneAt == 0) continue;
+      if(!PassesFilter(rows[i].rank, PanelFilter)) continue;
       live[nLive] = rows[i];
       nLive++;
    }
@@ -1060,6 +1072,7 @@ int OnInit()
 
    ArrayResize(seenKeys,  512);
    ArrayResize(seenFirst, 512);
+   ArrayResize(seenRank,  512);
    ArrayResize(goneRows,  64);
    seenCount     = 0;
    goneCount     = 0;

@@ -247,5 +247,23 @@ int main()
       Run("sub-20% pullback: B extends through it");
    }
 
+   // --- 9: hunt happens late in the retracement, then the trade runs on.
+   //     MaxRetraceBars must stop counting at the hunt, or the pattern would
+   //     be deleted mid-trade.
+   {
+      g_bars.clear();
+      double px = 1.00000;
+      for(int i = 0; i < 6; i++) Flat(px, 0.00020);
+      for(int i = 0; i < 5; i++) Impulse(px, 0.00200, 0.00020, true);   // AB = 0.01040
+      double bLevel = px;
+      for(int i = 0; i < 4; i++) Impulse(px, 0.00090, 0.00015, false);  // ~35% retrace
+      for(int i = 0; i < 17; i++) Flat(px, 0.00020);                    // long, quiet drift
+      Impulse(px, 0.00400, 0.00020, true);                              // bar 22: takes B
+      for(int i = 0; i < 10; i++) Flat(px, 0.00020);                    // trade runs on
+      printf("\n  (MaxRetraceBars = %d, bars after B = %d)\n",
+             MaxRetraceBars, (int)g_bars.size() - 1 - 10);
+      Run("hunt at bar B+22, then 10 more bars");
+   }
+
    return 0;
 }

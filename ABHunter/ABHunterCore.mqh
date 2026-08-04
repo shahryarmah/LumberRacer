@@ -554,33 +554,6 @@ void EvaluateLifecycle(SwingAB &s, MqlRates &rates[], int rates_total, double av
       return;
    }
 
-   // اعتبار زمانی. بدون آن، الگویی که اصلاحش ده برابر خود ایمپالس طول کشیده
-   // هنوز زنده می‌ماند و جدول اسکنر پر از الگوهای کهنه می‌شود.
-   //
-   // سقف بر حسب «کندل بعد از B» است نه روز تقویمی. قاعده «فقط همان روز» روی
-   // تایم های بالا خودش را می‌خورد: روی H8 فقط ۳ کندل در روز هست، و AB
-   // (حداقل MinCandles کندل) به علاوه اصلاح (حداقل MinRetraceCandles کندل)
-   // از یک روز بیشتر طول می‌کشد — یعنی هیچ الگویی هرگز به C نمی‌رسید.
-   // سقف کندلی خودبه‌خود با تایم فریم مقیاس می‌گیرد.
-   if(MaxRetraceBars > 0 && (rates_total - 1 - s.idxB) > MaxRetraceBars)
-   {
-      s.state = AB_INVALID;
-      return;
-   }
-
-   // قاعده روز تقویمی هنوز در دسترس است ولی پیش فرض خاموش است.
-   if(MaxPatternDays > 0 && rates_total > 0)
-   {
-      long dayB   = (long)s.timeB / 86400;
-      long dayNow = (long)rates[rates_total - 1].time / 86400;
-
-      if(dayNow - dayB >= MaxPatternDays)
-      {
-         s.state = AB_INVALID;
-         return;
-      }
-   }
-
    s.state = AB_WAIT_RETRACE;
 
    double dir      = s.isBull ? -1.0 : 1.0;   // اصلاح AB صعودی، نزولی است
@@ -601,6 +574,32 @@ void EvaluateLifecycle(SwingAB &s, MqlRates &rates[], int rates_total, double av
       // ردیابی اصلاح تا لحظه شکست B ادامه دارد، نه فقط تا وقتی معتبر شود.
       if(s.state == AB_WAIT_RETRACE || s.state == AB_RETRACED)
       {
+         // --- اعتبار زمانی، فقط روی فاز اصلاح.
+         //
+         // عمدا داخل حلقه است و نه اول تابع: بعد از هانت شدن B معامله شروع
+         // شده و شمردن باید بس شود. وگرنه الگویی که در کندل بیستم بعد از B
+         // هانت می‌شد، چهار کندل بعد وسط معامله از لیست حذف می‌شد.
+         // بعد از هانت، عمر الگو را دو قاعده خودش تعیین می‌کند: CD > AB و
+         // رسیدن قیمت به A.
+         //
+         // سقف بر حسب کندل است نه روز تقویمی. قاعده «فقط همان روز» روی تایم
+         // های بالا خودش را می‌خورد: روی H8 فقط ۳ کندل در روز هست، و AB به
+         // علاوه اصلاح از یک روز بیشتر طول می‌کشد — یعنی هیچ الگویی هرگز به
+         // C نمی‌رسید. سقف کندلی خودبه‌خود با تایم فریم مقیاس می‌گیرد.
+         if(MaxRetraceBars > 0 && (m - s.idxB) > MaxRetraceBars)
+         {
+            s.state = AB_INVALID;
+            return;
+         }
+
+         // قاعده روز تقویمی هنوز در دسترس است ولی پیش فرض خاموش است.
+         if(MaxPatternDays > 0 &&
+            ((long)rates[m].time / 86400 - (long)s.timeB / 86400) >= MaxPatternDays)
+         {
+            s.state = AB_INVALID;
+            return;
+         }
+
          double bodyExt = s.isBull ? MathMin(rates[m].open, rates[m].close)
                                    : MathMax(rates[m].open, rates[m].close);
          double wickExt = s.isBull ? rates[m].low : rates[m].high;
