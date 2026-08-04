@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
-//|                                              ABHunter V2.10.mq5   |
+//|                                            ABHunter.mq5   v2.61   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "2.60"
+#property version   "2.61"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
@@ -734,13 +734,57 @@ void MaybeAlert(SwingAB &s, TFCategory cat, ENUM_TIMEFRAMES tf, int rates_total)
 }
 
 //+------------------------------------------------------------------+
+// یادداشت «این تایم فریم دنبال نمی‌شود».
+string NotTrackedName()
+{
+   return "ABH_NoTrack_" + IntegerToString(ChartID());
+}
+
+void ShowNotTrackedNote()
+{
+   string name = NotTrackedName();
+
+   if(ObjectFind(0, name) < 0)
+   {
+      ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
+      ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+      ObjectSetInteger(0, name, OBJPROP_XDISTANCE, 10);
+      ObjectSetInteger(0, name, OBJPROP_YDISTANCE, 95);
+      ObjectSetInteger(0, name, OBJPROP_FONTSIZE, 8);
+      ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(0, name, OBJPROP_COLOR, CandleTimerColor);
+   }
+
+   ObjectSetString(0, name, OBJPROP_TEXT,
+                   TFToStr((ENUM_TIMEFRAMES)Period()) +
+                   " not tracked - pick it in STRUCT / TRIG / ENTRY");
+}
+
+void HideNotTrackedNote()
+{
+   string name = NotTrackedName();
+   if(ObjectFind(0, name) >= 0) ObjectDelete(0, name);
+}
+
+//+------------------------------------------------------------------+
 void ProcessIndicator()
 {
    CheckTFChangeAndDelete();
    DeleteLowerTFObjects();
 
    TFCategory cat = GetCategory();
-   if(cat == NONE) return;
+
+   // اندیکاتور فقط روی همان سه تایم فریم دکمه ها رسم می‌کند. تا حالا در
+   // بقیه تایم فریم ها بی صدا هیچ چیز نمی‌کشید، و چون اسکنر همه تایم فریم های
+   // ScanTimeframes را لیست می‌کند، به نظر می‌رسید لیست الگویی را می‌گوید که
+   // روی چارت وجود ندارد. حالا خودش می‌گوید چرا.
+   if(cat == NONE)
+   {
+      ShowNotTrackedNote();
+      return;
+   }
+
+   HideNotTrackedNote();
 
    int maxLookback = 0;
    if(cat == STRUCTURE)      maxLookback = MaxLookbackStructure;
@@ -848,6 +892,7 @@ void OnDeinit(const int reason)
             StringFind(name, "ABH_BtnTrigger_") == 0 ||
             StringFind(name, "ABH_BtnEntry_") == 0 ||
             StringFind(name, "ABH_State_") == 0 ||
+            StringFind(name, "ABH_NoTrack_") == 0 ||
             StringFind(name, "ABH_Timer_") == 0)
          {
             ObjectDelete(0, name);
