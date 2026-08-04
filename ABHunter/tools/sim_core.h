@@ -6,47 +6,45 @@
 //| (اسکنر چند نمادی) این فایل را include می‌کنند تا قواعد تشخیص      |
 //| یک منبع واحد داشته باشند و بین دو فایل واگرا نشوند.               |
 //+------------------------------------------------------------------+
-#property copyright "Copyright 2025, MetaQuotes Ltd."
-#property link      "https://www.mql5.com"
 
 //---- تنظیمات تشخیص سویینگ
-input int    MinCandles           = 3;
-input int    MaxCandles           = 10;   // طول پنجره تشخیص، نه طول خود سویینگ
-input int    MaxABSpan            = 30;   // حداکثر طول سویینگ AB بر حسب کندل
-input int    MaxOppositeCandles   = 1;
-input double MinBodyPercent       = 50.0;  // حداقل درصد بادی کندل (0 تا 100)
-input int    MaxNonStandard       = 1;
-input double MinABRatio           = 1.0;
-input double MaxABRatio           = 8.0;
+int    MinCandles           = 3;
+int    MaxCandles           = 10;   // طول پنجره تشخیص، نه طول خود سویینگ
+int    MaxABSpan            = 30;   // حداکثر طول سویینگ AB بر حسب کندل
+int    MaxOppositeCandles   = 1;
+double MinBodyPercent       = 50.0;  // حداقل درصد بادی کندل (0 تا 100)
+int    MaxNonStandard       = 1;
+double MinABRatio           = 1.0;
+double MaxABRatio           = 8.0;
 
 //---- تحمل کندل مخالف در محدوده AB
 // عدد ثابت MaxOppositeCandles برای پنجره کوتاه تشخیص خوب است، ولی محدوده
 // [idxA, idxB] می‌تواند خیلی بلندتر باشد و آنجا عدد ثابت هر ایمپالس چند کندلی
 // که یکی دو پولبک کوچک دارد را رد می‌کند. پس سهم مجاز نسبی است.
-input double AbOppositePercent    = 30.0;  // درصد مجاز کندل مخالف در محدوده AB
+double AbOppositePercent    = 30.0;  // درصد مجاز کندل مخالف در محدوده AB
 
 //---- مومنتم سویینگ
-input double MomentumMinPercent   = 60.0;  // حداقل درصد AB که باید با بدنه پوشیده شود
-input int    MaxNonProgressive    = 1;     // چند کندل مجاز است سقف بالاتر از کندل قبل نسازد
+double MomentumMinPercent   = 60.0;  // حداقل درصد AB که باید با بدنه پوشیده شود
+int    MaxNonProgressive    = 1;     // چند کندل مجاز است سقف بالاتر از کندل قبل نسازد
 
 //---- چرخه عمر الگو ABCD
-input bool   EnableABCD           = true;  // ردیابی چرخه عمر و اعتبارسنجی الگو
-input int    ABCDHistoryBars      = 300;   // تعداد کندل تاریخچه برای ردیابی الگو
-input double RetraceMinPercent    = 20.0;  // حداقل درصد اصلاح از AB
-input double RetraceMaxPercent    = 60.0;  // حداکثر درصد اصلاح (با بادی)
-input int    BConfirmBars        = 3;     // کندل صفر تا چند کندل بعد، B را تثبیت می‌کند
-input int    MinRetraceCandles    = 3;     // حداقل کندل اصلاح، از کندل بعد از تثبیت B
-input int    MaxRetraceBars       = 24;    // حداکثر کندل از B تا حالا (0 = بی نهایت)
-input int    MaxPatternDays       = 0;     // سقف روز تقویمی (0 = خاموش؛ روی تایم بالا نگذارید)
-input int    MaxPatternDaysLowTF  = 1;     // سقف روز از تشکیل B، فقط H2 و پایین تر (0 = خاموش)
-input bool   HideCounterABInRetrace = true; // پنهان کردن AB خلاف جهت که خودش اصلاح الگوی بزرگتر است
+bool   EnableABCD           = true;  // ردیابی چرخه عمر و اعتبارسنجی الگو
+int    ABCDHistoryBars      = 300;   // تعداد کندل تاریخچه برای ردیابی الگو
+double RetraceMinPercent    = 20.0;  // حداقل درصد اصلاح از AB
+double RetraceMaxPercent    = 60.0;  // حداکثر درصد اصلاح (با بادی)
+int    BConfirmBars        = 3;     // کندل صفر تا چند کندل بعد، B را تثبیت می‌کند
+int    MinRetraceCandles    = 3;     // حداقل کندل اصلاح، از کندل بعد از تثبیت B
+int    MaxRetraceBars       = 24;    // حداکثر کندل از B تا حالا (0 = بی نهایت)
+int    MaxPatternDays       = 0;     // سقف روز تقویمی (0 = خاموش؛ روی تایم بالا نگذارید)
+int    MaxPatternDaysLowTF  = 1;     // سقف روز از تشکیل B، فقط H2 و پایین تر (0 = خاموش)
+bool   HideCounterABInRetrace = true; // پنهان کردن AB خلاف جهت که خودش اصلاح الگوی بزرگتر است
 
 //---- کندل شکست
-input double BreakMinBodyPercent  = 90.0;  // حداقل درصد بادی کندل شکست
-input double BreakMaxWickPercent  = 5.0;   // حداکثر درصد سایه هر طرف
-input double BreakMinSizeRatio    = 1.0;   // حداقل اندازه کندل شکست نسبت به میانگین رنج
-input double BreakMinDistancePct  = 10.0;  // حداقل فاصله اوپن و کلوز از سطح B (درصد از AB)
-input int    BreakMaxCandles      = 3;     // ترکیب حداکثر چند کندل به عنوان یک کندل شکست
+double BreakMinBodyPercent  = 90.0;  // حداقل درصد بادی کندل شکست
+double BreakMaxWickPercent  = 5.0;   // حداکثر درصد سایه هر طرف
+double BreakMinSizeRatio    = 1.0;   // حداقل اندازه کندل شکست نسبت به میانگین رنج
+double BreakMinDistancePct  = 10.0;  // حداقل فاصله اوپن و کلوز از سطح B (درصد از AB)
+int    BreakMaxCandles      = 3;     // ترکیب حداکثر چند کندل به عنوان یک کندل شکست
 
 //+------------------------------------------------------------------+
 // لیست تایم فریم های هر دکمه. اینجا هستند تا اسکنر بتواند اندیس ذخیره شده
@@ -274,11 +272,11 @@ string StateText(SwingAB &s)
 // همه شرط های اعتبار یک نامزد AB روی محدوده واقعی [idxA, idxB].
 // جدا شده تا بشود دو نامزد را با یک منطق سنجید: اول A روی مبدا واقعی حرکت،
 // و اگر لگ از آنجا تمیز نبود همان A کوتاه تر.
-bool ValidateAB(MqlRates &rates[], int idxA, int idxB,
+bool ValidateAB(MqlRates rates[], int idxA, int idxB,
                 double priceA, double priceB, bool isBullish)
 {
-   if(idxA >= idxB) return false;
-   if(idxB - idxA + 1 < MinCandles) return false;
+   if(idxA >= idxB) { DBG("ValidateAB", 3); return false; }
+   if(idxB - idxA + 1 < MinCandles) { DBG("ValidateAB", 4); return false; }
 
    // --- شمارش روی محدوده واقعی AB، نه روی پنجره تشخیص.
    // این دو یکی نیستند: A تا مبدا حرکت به عقب می‌رود و B تا اولین اصلاح به
@@ -320,8 +318,8 @@ bool ValidateAB(MqlRates &rates[], int idxA, int idxB,
       else          { if(dn) sameBody += abBody; else if(up) oppBody += abBody; }
    }
 
-   if(sameBody <= 0.0) return false;
-   if(oppBody > sameBody * AbOppositePercent / 100.0) return false;
+   if(sameBody <= 0.0) { DBG("ValidateAB", 46); return false; }
+   if(oppBody > sameBody * AbOppositePercent / 100.0) { DBG("ValidateAB", 47); return false; }
 
    // سهم مجاز نسبی است، ولی هیچ وقت کمتر از عدد ثابت ورودی نمی‌شود.
    double abShare = abTotal * AbOppositePercent / 100.0;
@@ -336,8 +334,8 @@ bool ValidateAB(MqlRates &rates[], int idxA, int idxB,
    // محافظت لازم از جای دیگر می‌آید و به طول محدوده حساس نیست:
    //   abBull/abBear >= MinCandles  →  حداقل سه کندل جهت دار واقعی
    //   مومنتم ۲                      →  بدنه ها باید بخش عمده طول AB را بپوشانند
-   if(isBullish) { if(abBull < MinCandles || abBear > maxOpp) return false; }
-   else          { if(abBear < MinCandles || abBull > maxOpp) return false; }
+   if(isBullish) { if(abBull < MinCandles || abBear > maxOpp) { DBG("ValidateAB", 62); return false; } }
+   else          { if(abBear < MinCandles || abBull > maxOpp) { DBG("ValidateAB", 63); return false; } }
 
    // میانگین رنج روی خود محدوده AB حساب می‌شود، نه روی پنجره تشخیص —
    // حالا که هر دو سر سویینگ باز می‌شود این دو می‌توانند خیلی متفاوت باشند.
@@ -345,7 +343,7 @@ bool ValidateAB(MqlRates &rates[], int idxA, int idxB,
    for(int k = idxA; k <= idxB; k++)
       totalRange += (rates[k].high - rates[k].low);
    double avgRange = totalRange / abTotal;
-   if(avgRange <= 0.0) return false;
+   if(avgRange <= 0.0) { DBG("ValidateAB", 71); return false; }
 
    double abLength = MathAbs(priceB - priceA);
 
@@ -353,7 +351,7 @@ bool ValidateAB(MqlRates &rates[], int idxA, int idxB,
    // یک ایمپالس ۵ کندلی است و نباید فقط به خاطر طولش رد شود.
    double spanScale = MathMax(1.0, (double)abTotal / (double)MaxCandles);
    if(abLength < MinABRatio * avgRange || abLength > MaxABRatio * avgRange * spanScale)
-      return false;
+      { DBG("ValidateAB", 79); return false; }
 
    // --- مومنتم 1: حرکت باید پله ای باشد (سقف بالاتر از کندل قبل)
    int nonProgressive = 0;
@@ -363,7 +361,7 @@ bool ValidateAB(MqlRates &rates[], int idxA, int idxB,
                                   : (rates[m].low  < rates[m-1].low);
       if(!progressed) nonProgressive++;
    }
-   if(nonProgressive > (int)MathMax((double)MaxNonProgressive, abShare)) return false;
+   if(nonProgressive > (int)MathMax((double)MaxNonProgressive, abShare)) { DBG("ValidateAB", 89); return false; }
 
    // --- مومنتم 2: گستره بدنه ها باید بخش عمده طول AB را بپوشاند
    double bodyLo = MathMin(rates[idxA].open, rates[idxA].close);
@@ -376,13 +374,13 @@ bool ValidateAB(MqlRates &rates[], int idxA, int idxB,
       if(lo < bodyLo) bodyLo = lo;
       if(hi > bodyHi) bodyHi = hi;
    }
-   if((bodyHi - bodyLo) < abLength * MomentumMinPercent / 100.0) return false;
+   if((bodyHi - bodyLo) < abLength * MomentumMinPercent / 100.0) { DBG("ValidateAB", 102); return false; }
 
    return true;
 }
 
 //+------------------------------------------------------------------+
-int CollectSwings(MqlRates &rates[], int rates_total, int scanFrom, SwingAB &out[])
+int CollectSwings(MqlRates rates[], int rates_total, int scanFrom, SwingAB out[])
 {
    ArrayResize(out, rates_total);
    int cnt = 0;
@@ -628,7 +626,7 @@ int CollectSwings(MqlRates &rates[], int rates_total, int scanFrom, SwingAB &out
 
 //+------------------------------------------------------------------+
 // ساخت کندل مرکب از چند کندل متوالی
-void BuildComposite(MqlRates &rates[], int from, int to, Composite &c)
+void BuildComposite(MqlRates rates[], int from, int to, Composite &c)
 {
    c.open  = rates[from].open;
    c.close = rates[to].close;
@@ -690,7 +688,7 @@ void KillSwing(SwingAB &s, ABDeadReason why, datetime when)
 // بازپخش چرخه عمر یک AB از کندل بعد از B تا کندل جاری.
 // وضعیت کاملا از روی قیمت بازسازی می‌شود، پس نیازی به ذخیره سازی حالت نیست.
 // tf فقط برای قاعده «سقف یک روز روی تایم فریم های پایین» لازم است.
-void EvaluateLifecycle(SwingAB &s, MqlRates &rates[], int rates_total, double avgRange,
+void EvaluateLifecycle(SwingAB &s, MqlRates rates[], int rates_total, double avgRange,
                        ENUM_TIMEFRAMES tf)
 {
    if(s.live)
@@ -971,7 +969,7 @@ void EvaluateLifecycle(SwingAB &s, MqlRates &rates[], int rates_total, double av
 //+------------------------------------------------------------------+
 // کاهش زنجیره AB ها (فقط وقتی چرخه عمر خاموش است):
 //   خلاف جهت → هر دو؛ هم جهت + جدید بزرگتر → قبلی حذف؛ هم جهت + جدید کوچکتر → هر دو
-int ReduceSwings(SwingAB &src[], int n, SwingAB &dst[])
+int ReduceSwings(SwingAB src[], int n, SwingAB dst[])
 {
    ArrayResize(dst, n);
    int m = 0;
@@ -992,7 +990,7 @@ int ReduceSwings(SwingAB &src[], int n, SwingAB &dst[])
 // آیا این الگوی مرده هنوز باید نشان داده شود؟
 // الگوی باطل بی سروصدا حذف نمی‌شود؛ تا انتهای همان روزی که مرده، خاکستری
 // می‌ماند تا بشود بررسی کرد که درست حذف شده یا نه.
-bool DeadStillVisible(SwingAB &s, MqlRates &rates[], int rates_total)
+bool DeadStillVisible(SwingAB &s, MqlRates rates[], int rates_total)
 {
    if(s.deadTime == 0 || rates_total <= 0) return false;
 
@@ -1005,8 +1003,8 @@ bool DeadStillVisible(SwingAB &s, MqlRates &rates[], int rates_total)
 // از سویینگ های خام، فهرست الگوهای «فعال» را می‌سازد:
 // چرخه عمر را بازپخش می‌کند، لگ های اصلاحی خلاف جهت را کنار می‌گذارد، و
 // الگوهای مرده امروز را برای بازرسی نگه می‌دارد.
-int BuildActiveSwings(MqlRates &rates[], int rates_total, double avgRange,
-                      SwingAB &raw[], int nRaw, SwingAB &out[],
+int BuildActiveSwings(MqlRates rates[], int rates_total, double avgRange,
+                      SwingAB raw[], int nRaw, SwingAB out[],
                       bool keepOnlyLast, bool showPrevious, ENUM_TIMEFRAMES tf)
 {
    int nKept = 0;
@@ -1031,7 +1029,7 @@ int BuildActiveSwings(MqlRates &rates[], int rates_total, double avgRange,
       // فقط اصلاح است نه الگوی مستقل، پس کنار گذاشته می‌شود.
       if(HideCounterABInRetrace && nKept > 1)
       {
-         SwingAB kept2[];
+         SwingAB kept2[8192];
          ArrayResize(kept2, nKept);
          int n2 = 0;
 
@@ -1096,7 +1094,7 @@ int BuildActiveSwings(MqlRates &rates[], int rates_total, double avgRange,
 // یا -1 اگر داده کافی در دسترس نباشد (مثلا هنوز دانلود نشده).
 int AnalyzeSymbol(string symbol, ENUM_TIMEFRAMES tf, int historyBars, int maxLookback,
                   bool keepOnlyLast, bool showPrevious,
-                  MqlRates &rates[], int &rates_total, SwingAB &out[])
+                  MqlRates rates[], int &rates_total, SwingAB out[])
 {
    rates_total = 0;
 
@@ -1118,7 +1116,7 @@ int AnalyzeSymbol(string symbol, ENUM_TIMEFRAMES tf, int historyBars, int maxLoo
 
    int scanFrom = EnableABCD ? MinCandles : (rates_total - maxLookback - MaxCandles);
 
-   SwingAB raw[];
+   SwingAB raw[8192];
    int nRaw = CollectSwings(rates, rates_total, scanFrom, raw);
 
    return BuildActiveSwings(rates, rates_total, avgRange, raw, nRaw, out,

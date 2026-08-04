@@ -49,6 +49,29 @@ static int  Bars(const string &, int) { return 0; }
 template<typename T> bool ArraySetAsSeries(T *, bool) { return true; }
 template<typename T> int  CopyRates(const string &, int, int, int, T *) { return 0; }
 
+// فاصله زمانی کندل ها؛ سناریوها می‌توانند عوضش کنند تا قواعد وابسته به
+// تایم فریم (مثل سقف یک روزه روی H2 و پایین تر) تست شوند.
+static long long g_barSeconds = 14400;   // H4
+static int       g_simTF      = PERIOD_H4;
+
+static int PeriodSeconds(int tf)
+{
+   switch(tf)
+   {
+      case PERIOD_M1: return 60;      case PERIOD_M2:  return 120;
+      case PERIOD_M3: return 180;     case PERIOD_M4:  return 240;
+      case PERIOD_M5: return 300;     case PERIOD_M6:  return 360;
+      case PERIOD_M10: return 600;    case PERIOD_M12: return 720;
+      case PERIOD_M15: return 900;    case PERIOD_M20: return 1200;
+      case PERIOD_M30: return 1800;   case PERIOD_H1:  return 3600;
+      case PERIOD_H2: return 7200;    case PERIOD_H3:  return 10800;
+      case PERIOD_H4: return 14400;   case PERIOD_H6:  return 21600;
+      case PERIOD_H8: return 28800;   case PERIOD_H12: return 43200;
+      case PERIOD_D1: return 86400;
+   }
+   return 0;
+}
+
 static bool g_verbose = false;
 #define DBG(fn, ln) do { if(g_verbose) printf("      x %s check #%d\n", fn, ln); } while(0)
 
@@ -61,7 +84,7 @@ static void Bar(double o, double h, double l, double c)
 {
    MqlRates r;
    memset(&r, 0, sizeof(r));
-   r.time  = 1767225600LL + (long long)g_bars.size() * 14400LL;  // H4 spacing
+   r.time  = 1767225600LL + (long long)g_bars.size() * g_barSeconds;
    r.open = o; r.high = h; r.low = l; r.close = c;
    g_bars.push_back(r);
 }
@@ -123,7 +146,7 @@ static void Run(const char *title)
                 k, raw[k].idxB, k+1, raw[k+1].idxA);
 
    static SwingAB act[8192];
-   int nAct = BuildActiveSwings(rates, n, avgRange, raw, nRaw, act, false, false);
+   int nAct = BuildActiveSwings(rates, n, avgRange, raw, nRaw, act, false, false, g_simTF);
    printf("  BuildActiveSwings -> %d\n", nAct);
 
    for(int k = 0; k < nAct; k++)
@@ -137,7 +160,7 @@ static void Run(const char *title)
    {
       SwingAB s = raw[k];
       g_verbose = true;
-      EvaluateLifecycle(s, rates, n, avgRange);
+      EvaluateLifecycle(s, rates, n, avgRange, g_simTF);
       g_verbose = false;
       printf("    lifecycle raw[%d] -> %s\n", k, StateName(s.state));
    }
@@ -326,6 +349,32 @@ int main()
       printf("\n  (B = %.5f, 20%% level = %.5f, retrace low = %.5f)\n",
              bLevel, bLevel - 0.00208, low);
       Run("retracement lives in candles 1-3, B taken at candle 4");
+   }
+
+   // --- 14: the one-day cap applies on H2 and below only.
+   //     Same bars, same pattern, evaluated once as M15 (one day = 96 bars,
+   //     so it must expire) and once as H4 (rule off, so it must stay alive).
+   {
+      int savedRetraceBars = MaxRetraceBars;
+      MaxRetraceBars = 0;                 // بی نهایت، تا فقط قاعده روز تست شود
+
+      g_bars.clear();
+      double px = 1.00000;
+      g_barSeconds = 900;                 // M15
+      for(int i = 0; i < 6; i++) Flat(px, 0.00020);
+      for(int i = 0; i < 5; i++) Impulse(px, 0.00200, 0.00020, true);   // A -> B
+      for(int i = 0; i < 4; i++) Impulse(px, 0.00080, 0.00015, false);  // C معتبر
+      for(int i = 0; i < 110; i++) Flat(px, 0.00020);                   // بیش از یک روز
+
+      g_simTF = PERIOD_M15;
+      Run("one-day cap ON at M15 (should be X old)");
+
+      g_simTF = PERIOD_H4;
+      Run("same bars at H4 (rule off, should stay alive)");
+
+      g_simTF      = PERIOD_H4;
+      g_barSeconds = 14400;
+      MaxRetraceBars = savedRetraceBars;
    }
 
    return 0;

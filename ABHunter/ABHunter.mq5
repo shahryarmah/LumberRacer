@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
-//|                                            ABHunter.mq5   v2.72   |
+//|                                            ABHunter.mq5   v2.73   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "2.72"
+#property version   "2.73"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
@@ -55,6 +55,12 @@ input bool   EnableAlerts         = false; // هشدار در لحظات کلی�
 //---- تایمر کندل
 input bool   ShowCandleTimer      = true;      // نمایش زمان باقی مانده تا بسته شدن کندل
 input color  CandleTimerColor     = clrGray;   // رنگ تایمر
+
+//---- تایم فریم فراکتال
+// زیر تایمر نوشته می‌شود: بعد از هانت شدن B روی این تایم فریم، برای کندل
+// شکست و کندل سیگنال باید به این تایم فریم پایین تر رفت.
+input bool   ShowFractalTF        = true;         // نمایش تایم فریم فراکتال زیر تایمر
+input color  FractalTFColor       = clrSteelBlue; // رنگ تایم فریم فراکتال
 
 //---- الگوهای باطل شده
 // الگوی مرده بی سروصدا حذف نمی‌شود؛ تا انتهای همان روز خاکستری روی چارت
@@ -351,6 +357,36 @@ void UpdateCandleTimer()
    ObjectSetInteger(0, name, OBJPROP_COLOR, CandleTimerColor);
    ObjectSetString(0, name, OBJPROP_TEXT, TFToStr((ENUM_TIMEFRAMES)Period()) + "  " + txt);
 }
+
+//+------------------------------------------------------------------+
+// تایم فریم فراکتال تایم فریم جاری، درست زیر تایمر کندل.
+// اگر تایم فریم جاری در نردبان نباشد، چیزی نوشته نمی‌شود.
+void UpdateFractalTFLabel()
+{
+   string name = "ABH_Fract_" + IntegerToString(ChartID());
+
+   string frac = ShowFractalTF ? FractalTFText((ENUM_TIMEFRAMES)Period()) : "";
+
+   if(StringLen(frac) == 0)
+   {
+      if(ObjectFind(0, name) >= 0) ObjectDelete(0, name);
+      return;
+   }
+
+   if(ObjectFind(0, name) < 0)
+   {
+      ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
+      ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+      ObjectSetInteger(0, name, OBJPROP_XDISTANCE, 10);
+      // تایمر روی 100 با فونت 11 است، پس یک خط پایین تر
+      ObjectSetInteger(0, name, OBJPROP_YDISTANCE, 118);
+      ObjectSetInteger(0, name, OBJPROP_FONTSIZE, 10);
+      ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+   }
+
+   ObjectSetInteger(0, name, OBJPROP_COLOR, FractalTFColor);
+   ObjectSetString(0, name, OBJPROP_TEXT, "F: " + frac);
+}
 //+------------------------------------------------------------------+
 
 int OnInit()
@@ -399,6 +435,7 @@ int OnInit()
    EventSetTimer(1);
 
    UpdateCandleTimer();
+   UpdateFractalTFLabel();
    ChartRedraw();
    return(INIT_SUCCEEDED);
 }
@@ -854,6 +891,7 @@ void OnTimer()
    // برای وقتی که بازار تیک ندارد ولی کندل بسته می‌شود یا کاربر تایم فریم را عوض کرده
    ProcessIndicator();
    UpdateCandleTimer();
+   UpdateFractalTFLabel();
    ChartRedraw();
 }
 
@@ -880,7 +918,8 @@ void OnDeinit(const int reason)
             StringFind(name, "ABH_BtnEntry_") == 0 ||
             StringFind(name, "ABH_State_") == 0 ||
             StringFind(name, "ABH_Cfg_") == 0 ||
-            StringFind(name, "ABH_Timer_") == 0)
+            StringFind(name, "ABH_Timer_") == 0 ||
+            StringFind(name, "ABH_Fract_") == 0)
          {
             ObjectDelete(0, name);
          }

@@ -12,7 +12,7 @@ def clean(text):
         s = line.strip()
         if s.startswith("#property") or s.startswith("#include"):
             continue
-        line = re.sub(r'^(\s*)input\s+', r'\1const ', line)
+        line = re.sub(r'^(\s*)input\s+', r'\1', line)   # قابل تغییر در تست
         line = re.sub(r'&(\w+)\[\]', r'\1[]', line)
         line = re.sub(r'(\w+)\[\]\s*;', r'\1[8192];', line)
         out.append(line)
