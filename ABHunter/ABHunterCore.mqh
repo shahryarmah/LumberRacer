@@ -105,6 +105,8 @@ struct SwingAB
    double   breakHigh;
    double   breakLow;
 
+   int      idxHunt;    // کندلی که B در آن برداشته شد (-1 یعنی هنوز نشده)
+   datetime timeHunt;
    double   priceD;     // بیشترین نفوذ بعد از شکست
 
    int      idxSignal;  // کندلی که سیگنال ورود داد
@@ -461,6 +463,8 @@ int CollectSwings(MqlRates &rates[], int rates_total, int scanFrom, SwingAB &out
          out[cnt].timeBreak     = 0;
          out[cnt].breakHigh     = 0.0;
          out[cnt].breakLow      = 0.0;
+         out[cnt].idxHunt       = -1;
+         out[cnt].timeHunt      = 0;
          out[cnt].priceD        = 0.0;
          out[cnt].idxSignal     = -1;
          out[cnt].timeSignal    = 0;
@@ -660,8 +664,10 @@ void EvaluateLifecycle(SwingAB &s, MqlRates &rates[], int rates_total, double av
          bool crossedB = s.isBull ? (rates[m].high > s.priceB) : (rates[m].low < s.priceB);
          if(!crossedB) continue;
 
-         s.state  = AB_BROKEN;
-         s.priceD = s.isBull ? rates[m].high : rates[m].low;
+         s.state    = AB_BROKEN;
+         s.idxHunt  = m;
+         s.timeHunt = rates[m].time;
+         s.priceD   = s.isBull ? rates[m].high : rates[m].low;
       }
 
       if(s.state == AB_BROKEN)
@@ -751,8 +757,10 @@ void EvaluateLifecycle(SwingAB &s, MqlRates &rates[], int rates_total, double av
             if(deepEnough)
             {
                // نقدینگی برداشته شد — همان D
-               s.state  = AB_BROKEN;
-               s.priceD = s.isBull ? rates[last].high : rates[last].low;
+               s.state    = AB_BROKEN;
+               s.idxHunt  = last;
+               s.timeHunt = rates[last].time;
+               s.priceD   = s.isBull ? rates[last].high : rates[last].low;
             }
             else
             {

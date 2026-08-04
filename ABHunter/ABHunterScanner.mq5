@@ -17,7 +17,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "2.57"
+#property version   "2.58"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
@@ -70,6 +70,7 @@ input color  PanelBackColor    = clrBlack;
 input color  PanelBorderColor  = clrDimGray; // رنگ قاب جدول
 input int    PanelMaxRows      = 100;  // سقف ردیف؛ به هر حال از ارتفاع چارت بیشتر نمی‌شود
 input bool   GroupBySymbol     = true; // نمادی که در چند تایم فریم الگو دارد یک ردیف کشویی شود
+input int    HuntKeepBars      = 1;    // الگوی تازه هانت شده چند کندل خاکستری در جدول بماند (-1 = هرگز)
 
 //+------------------------------------------------------------------+
 // یک ردیف جدول
@@ -636,12 +637,14 @@ void DrawDataRow(ScanRow &r, int row, string symCell, string tfCell,
 // وقتی ردیف ها از ارتفاع چارت بیشتر شدند مهم ترین نمادها بالا می‌مانند.
 void SortRows(ScanRow &r[], int n)
 {
-   // بهترین (کمترین) رتبه هر نماد
+   // بهترین (کمترین) رتبه هر نماد، جدا برای زنده ها و خاکستری ها
    for(int i = 0; i < n; i++)
    {
       int best = r[i].rank;
       for(int j = 0; j < n; j++)
-         if(r[j].symIndex == r[i].symIndex && r[j].rank < best) best = r[j].rank;
+         if(r[j].symIndex == r[i].symIndex &&
+            (r[j].goneAt > 0) == (r[i].goneAt > 0) &&
+            r[j].rank < best) best = r[j].rank;
       r[i].groupRank = best;
    }
 
@@ -651,6 +654,14 @@ void SortRows(ScanRow &r[], int n)
 
       for(int j = i + 1; j < n; j++)
       {
+         // خاکستری ها همیشه پایین جدول
+         bool fadeJ = (r[j].goneAt > 0), fadeB = (r[best].goneAt > 0);
+         if(fadeJ != fadeB)
+         {
+            if(!fadeJ) best = j;
+            continue;
+         }
+
          if(r[j].groupRank != r[best].groupRank)
          {
             if(r[j].groupRank < r[best].groupRank) best = j;
@@ -746,6 +757,9 @@ void UpdateGoneList(ScanRow &cur[], int nCur, ScanRow &all[], int nAll)
    // هر چه در اسکن قبل بود و حالا نیست، مهلت خاکستری می‌گیرد
    for(int i = 0; i < lastLiveCount; i++)
    {
+      // ردیفی که قبلا خودش خاکستریِ «تازه هانت شده» بوده، مهلت دومی نمی‌گیرد
+      if(lastLive[i].goneAt > 0) continue;
+
       bool stillHere = false;
       for(int j = 0; j < nCur; j++)
          if(cur[j].key == lastLive[i].key) { stillHere = true; break; }
@@ -978,7 +992,23 @@ void RunScan()
             rows[nRows].rank      = rank;
             rows[nRows].groupRank = rank;
             rows[nRows].key       = key;
-            rows[nRows].goneAt    = 0;
+
+            // الگویی که تازه هانت شده از فیلتر جدول می‌افتد، ولی همان لحظه
+            // مهم ترین لحظه است. پس مستقیما به صورت خاکستری وارد جدول می‌شود
+            // و به اندازه HuntKeepBars کندلِ همان تایم فریم می‌ماند.
+            //
+            // سنجش با «تعداد کندل از هانت» است نه ثانیه، چون خودش با تایم
+            // فریم مقیاس می‌گیرد: روی H8 حدود هشت ساعت، روی M30 نیم ساعت.
+            //
+            // این جدا از سازوکار «ردیف ناپدید شده» است. آن یکی فقط چیزی را
+            // می‌گیرد که قبلا در جدول بوده؛ الگویی که بین دو اسکن یکراست به
+            // HUNT می‌رفت اصلا دیده نمی‌شد.
+            rows[nRows].goneAt = 0;
+
+            if(HuntKeepBars >= 0 && active[k].state == AB_BROKEN &&
+               active[k].idxHunt >= 0 &&
+               (rates_total - 1 - active[k].idxHunt) <= HuntKeepBars)
+               rows[nRows].goneAt = 1;   // نشانه «خاکستری»، نه زمان واقعی
 
             // به جای یک ستاره یکسان، سن الگو نوشته می‌شود تا با یک نگاه معلوم
             // باشد کدام تازه تر است
@@ -1002,7 +1032,8 @@ void RunScan()
 
    for(int i = 0; i < nRows; i++)
    {
-      if(!PassesFilter(rows[i].rank, PanelFilter)) continue;
+      // ردیف خاکستریِ تازه هانت شده مستقل از فیلتر می‌آید
+      if(!PassesFilter(rows[i].rank, PanelFilter) && rows[i].goneAt == 0) continue;
       live[nLive] = rows[i];
       nLive++;
    }
