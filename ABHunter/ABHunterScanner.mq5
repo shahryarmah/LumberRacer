@@ -17,7 +17,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "2.56"
+#property version   "2.57"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
@@ -69,6 +69,7 @@ input color  PanelExpiredColor = clrGray;   // رنگ ردیف های در حا�
 input color  PanelBackColor    = clrBlack;
 input color  PanelBorderColor  = clrDimGray; // رنگ قاب جدول
 input int    PanelMaxRows      = 100;  // سقف ردیف؛ به هر حال از ارتفاع چارت بیشتر نمی‌شود
+input bool   GroupBySymbol     = true; // نمادی که در چند تایم فریم الگو دارد یک ردیف کشویی شود
 
 //+------------------------------------------------------------------+
 // یک ردیف جدول
@@ -126,7 +127,12 @@ string   liveSymbol[];
 string   livePrefix[];
 color    liveColor[];
 int      liveRow[];
+string   liveGroup[];   // اگر سربرگ گروه باشد، نام نماد؛ وگرنه خالی
 int      liveCount   = 0;
+
+// نمادهایی که کاربر بازشان کرده است
+string   expandedSym[];
+int      expandedCount = 0;
 int      timerTicks  = 0;
 int      panelLeft = 0;   // مختصات چپ جدول، هر بار دوباره حساب می‌شود
 
@@ -557,6 +563,74 @@ string StateTextOf(ScanRow &r)
 }
 
 //+------------------------------------------------------------------+
+// نمادهایی که کاربر بازشان کرده. حالت باز/بسته بین اسکن ها می‌ماند ولی
+// عمدا روی دیسک ذخیره نمی‌شود؛ یک انتخاب لحظه ای است نه تنظیم.
+int ExpandedIndex(string sym)
+{
+   for(int i = 0; i < expandedCount; i++)
+      if(expandedSym[i] == sym) return i;
+   return -1;
+}
+
+bool IsExpanded(string sym)
+{
+   return (ExpandedIndex(sym) >= 0);
+}
+
+void ToggleExpanded(string sym)
+{
+   int idx = ExpandedIndex(sym);
+
+   if(idx >= 0)
+   {
+      for(int i = idx; i < expandedCount - 1; i++) expandedSym[i] = expandedSym[i + 1];
+      expandedCount--;
+      return;
+   }
+
+   if(expandedCount >= ArraySize(expandedSym))
+      ArrayResize(expandedSym, expandedCount + 32);
+
+   expandedSym[expandedCount] = sym;
+   expandedCount++;
+}
+
+//+------------------------------------------------------------------+
+// یک ردیف داده. بخش ثابت جدا نگه داشته می‌شود تا RefreshLive بتواند فقط دو
+// ستون آخر را دوباره بسازد بدون اینکه کل اسکن تکرار شود.
+// showPos خاموش یعنی ستون های POS و P/L خالی بمانند — برای زیرمجموعه های یک
+// نماد که وضعیت معامله شان با سربرگ یکی است.
+void DrawDataRow(ScanRow &r, int row, string symCell, string tfCell,
+                 bool isGroup, bool showPos = true)
+{
+   string prefix = PadRight(symCell, 11) +
+                   PadRight(tfCell, 5) +
+                   PadRight(r.isBull ? "BULL" : "BEAR", 5) +
+                   PadRight(StateTextOf(r), 7) +
+                   PadRight(r.newMark, 5);
+
+   color rowColor = (r.goneAt > 0)
+                       ? PanelExpiredColor
+                       : (r.isBull ? PanelBullColor : PanelBearColor);
+
+   string posSym = showPos ? r.symbol : "";
+
+   string posMark; double profit; bool hasAny;
+   PositionInfo(posSym, posMark, profit, hasAny);
+
+   PanelRow(row, prefix + PadRight(posMark, 6) + FormatProfit(profit, hasAny), rowColor);
+
+   if(liveCount >= ArraySize(liveRow)) return;
+
+   liveSymbol[liveCount] = posSym;
+   livePrefix[liveCount] = prefix;
+   liveColor[liveCount]  = rowColor;
+   liveRow[liveCount]    = row;
+   liveGroup[liveCount]  = isGroup ? r.symbol : "";
+   liveCount++;
+}
+
+//+------------------------------------------------------------------+
 // مرتب سازی: اول نمادی که به معامله نزدیک تر است، ولی همه ردیف های یک نماد
 // کنار هم. اینطور لازم نیست یک نماد را دو جای جدول دنبال کنید، و در عین حال
 // وقتی ردیف ها از ارتفاع چارت بیشتر شدند مهم ترین نمادها بالا می‌مانند.
@@ -746,37 +820,53 @@ void DrawPanel()
    ArrayResize(liveRow,    rowLimit + 4);
    liveCount = 0;
 
+   ArrayResize(liveGroup, rowLimit + 4);
+   liveCount = 0;
+
    int shown = 0;
+   int i     = 0;   // بیرون از حلقه، چون خط «چند مورد دیگر» به آن نیاز دارد
 
-   for(int i = 0; i < panelRowCount && shown < rowLimit; i++)
+   while(i < panelRowCount && shown < rowLimit)
    {
-      string dir = panelRows[i].isBull ? "BULL" : "BEAR";
+      // چند ردیف پشت سر هم برای همین نماد؟ فهرست از قبل بر اساس نماد گروه
+      // شده، پس شمردن ردیف های متوالی کافی است. زنده و خاکستری با هم گروه
+      // نمی‌شوند تا رنگ ردیف معنایش را از دست ندهد.
+      int grp = 1;
+      while(i + grp < panelRowCount &&
+            panelRows[i + grp].symbol == panelRows[i].symbol &&
+            (panelRows[i + grp].goneAt > 0) == (panelRows[i].goneAt > 0)) grp++;
 
-      // بخش ثابت ردیف جدا نگه داشته می‌شود تا RefreshLive بتواند فقط دو
-      // ستون آخر را دوباره بسازد، بدون اینکه کل اسکن تکرار شود.
-      string prefix = PadRight(panelRows[i].symbol, 11) +
-                      PadRight(TFToStr(panelRows[i].tf), 5) +
-                      PadRight(dir, 5) +
-                      PadRight(StateTextOf(panelRows[i]), 7) +
-                      PadRight(panelRows[i].newMark, 5);
+      if(!GroupBySymbol || grp == 1)
+      {
+         DrawDataRow(panelRows[i], row, panelRows[i].symbol,
+                     TFToStr(panelRows[i].tf), false);
+         row++; shown++; i++;
+         continue;
+      }
 
-      color rowColor = (panelRows[i].goneAt > 0)
-                          ? PanelExpiredColor
-                          : (panelRows[i].isBull ? PanelBullColor : PanelBearColor);
+      // --- سربرگ گروه. ردیف های هر نماد بر اساس رتبه مرتب اند، پس
+      //     panelRows[i] همان نزدیک ترین به معامله است و وضعیتش نمایندگی
+      //     می‌کند. ستون TF تعداد تایم فریم ها را می‌گوید.
+      bool expanded = IsExpanded(panelRows[i].symbol);
 
-      string posMark; double profit; bool hasAny;
-      PositionInfo(panelRows[i].symbol, posMark, profit, hasAny);
+      DrawDataRow(panelRows[i], row,
+                  (expanded ? "-" : "+") + panelRows[i].symbol,
+                  "x" + IntegerToString(grp), true);
+      row++; shown++;
 
-      PanelRow(row, prefix + PadRight(posMark, 6) + FormatProfit(profit, hasAny), rowColor);
+      if(expanded)
+      {
+         for(int k = 0; k < grp && shown < rowLimit; k++)
+         {
+            // ستون نماد خالی می‌ماند تا زیرمجموعه بودن دیده شود، و POS/PL
+            // هم تکرار نمی‌شود چون برای کل نماد یکی است و در سربرگ آمده.
+            DrawDataRow(panelRows[i + k], row, "", "  " + TFToStr(panelRows[i + k].tf),
+                        false, false);
+            row++; shown++;
+         }
+      }
 
-      liveSymbol[liveCount] = panelRows[i].symbol;
-      livePrefix[liveCount] = prefix;
-      liveColor[liveCount]  = rowColor;
-      liveRow[liveCount]    = row;
-      liveCount++;
-
-      row++;
-      shown++;
+      i += grp;
    }
 
    if(scanSymbolCount == 0)
@@ -790,19 +880,19 @@ void DrawPanel()
       PanelRow(row, "(no active pattern)", PanelTextColor);
       row++;
    }
-   else if(panelRowCount > shown)
+   else if(i < panelRowCount)
    {
       // فقط تعداد گفتن کمکی نمی‌کرد؛ خود موارد جا مانده هم نوشته می‌شوند تا
       // بدون بزرگ کردن پنجره چارت معلوم باشد چه چیزی بیرون از قاب مانده.
       string more = "";
-      for(int i = shown; i < panelRowCount; i++)
+      for(int k = i; k < panelRowCount; k++)
       {
          if(StringLen(more) > 46) { more = more + " ..."; break; }
          if(StringLen(more) > 0) more = more + ", ";
-         more = more + panelRows[i].symbol + " " + TFToStr(panelRows[i].tf);
+         more = more + panelRows[k].symbol + " " + TFToStr(panelRows[k].tf);
       }
 
-      PanelRow(row, "+" + IntegerToString(panelRowCount - shown) + ": " + more,
+      PanelRow(row, "+" + IntegerToString(panelRowCount - i) + ": " + more,
                PanelTextColor);
       row++;
    }
@@ -942,6 +1032,7 @@ int OnInit()
    ArrayResize(goneRows,  64);
    seenCount     = 0;
    goneCount     = 0;
+   expandedCount = 0;
    lastLiveCount = 0;
    panelRowCount = 0;
    firstScanDone = false;
@@ -1013,7 +1104,25 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam,
 {
    // با تغییر اندازه چارت، جدول همان لحظه دوباره چیده می‌شود. قبلا باید تا
    // اسکن بعدی صبر می‌کردید تا تعداد ردیف ها با ارتفاع جدید جور شود.
-   if(id == CHARTEVENT_CHART_CHANGE) DrawPanel();
+   if(id == CHARTEVENT_CHART_CHANGE) { DrawPanel(); return; }
+
+   // کلیک روی سربرگ یک گروه، فهرست تایم فریم هایش را باز و بسته می‌کند
+   if(id != CHARTEVENT_OBJECT_CLICK) return;
+
+   string rowPrefix = objPrefix + "R";
+   if(StringFind(sparam, rowPrefix) != 0) return;
+
+   int clicked = (int)StringToInteger(StringSubstr(sparam, StringLen(rowPrefix)));
+
+   for(int i = 0; i < liveCount; i++)
+   {
+      if(liveRow[i] != clicked) continue;
+      if(StringLen(liveGroup[i]) == 0) return;   // ردیف عادی، کاری ندارد
+
+      ToggleExpanded(liveGroup[i]);
+      DrawPanel();
+      return;
+   }
 }
 
 //+------------------------------------------------------------------+

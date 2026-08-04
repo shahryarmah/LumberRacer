@@ -217,7 +217,34 @@ int main()
       double bLevel = px;
       for(int i = 0; i < 2; i++) Impulse(px, 0.00200, 0.00020, false);
       Bar(px, bLevel + 0.00060, px - 0.00020, bLevel + 0.00040);
-      Run("B taken with too short a retracement");
+      Run("B taken after a 2-bar retracement (must be HUNT, not deleted)");
+   }
+
+   // --- 7: deep but SHORT retracement (2 bars), then B hunted.
+   //     must be HUNT, not deleted: only a shallow (<20%) retracement kills it
+   {
+      g_bars.clear();
+      double px = 1.00000;
+      for(int i = 0; i < 6; i++) Flat(px, 0.00020);
+      for(int i = 0; i < 5; i++) Impulse(px, 0.00200, 0.00020, true);   // AB = 0.01040
+      double bLevel = px;
+      Impulse(px, 0.00250, 0.00020, false);        // 2-bar retrace, ~48% - deep enough
+      Impulse(px, 0.00250, 0.00020, false);
+      Bar(px, bLevel + 0.00060, px - 0.00020, bLevel + 0.00040);        // live bar takes B
+      Run("deep but 2-bar retracement, then B hunted");
+   }
+
+   // --- 8: a pullback under 20% is not a retracement at all -- B simply
+   //     extends through it, so there is no AB waiting to be invalidated.
+   {
+      g_bars.clear();
+      double px = 1.00000;
+      for(int i = 0; i < 6; i++) Flat(px, 0.00020);
+      for(int i = 0; i < 5; i++) Impulse(px, 0.00200, 0.00020, true);
+      for(int i = 0; i < 2; i++) Impulse(px, 0.00025, 0.00005, false);  // ~5%
+      for(int i = 0; i < 3; i++) Impulse(px, 0.00200, 0.00020, true);
+      for(int i = 0; i < 4; i++) Impulse(px, 0.00120, 0.00020, false);
+      Run("sub-20% pullback: B extends through it");
    }
 
    return 0;

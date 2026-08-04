@@ -627,15 +627,26 @@ void EvaluateLifecycle(SwingAB &s, MqlRates &rates[], int rates_total, double av
             // نه اینکه فقط 3 کندل از B گذشته باشد.
             bool enoughCandles = (s.idxC >= 0 && (s.idxC - s.idxB) >= MinRetraceCandles);
 
-            // باطل: قیمت سطح B را بشکند بدون اینکه اصلاح کافی رخ داده باشد
             bool touchedB = s.isBull ? (rates[m].high > s.priceB) : (rates[m].low < s.priceB);
-            if(touchedB && !(retraceDeepEnough && enoughCandles))
+
+            // باطل فقط وقتی که B برداشته شود و اصلاح اصلا به عمق ۲۰ درصد
+            // نرسیده باشد. کوتاه بودن اصلاح (کمتر از MinRetraceCandles کندل)
+            // الگو را باطل نمی‌کند — آن شرط برای «تایید C» است و در فهرست
+            // شرط های ابطال نیست.
+            //
+            // قبلا هر دو با هم شرط ابطال بودند، و اصلاحی که به اندازه کافی
+            // عمیق بود ولی در دو کندل جمع می‌شد باعث می‌شد الگو موقع هانت
+            // شدن به جای HUNT کلا حذف شود.
+            if(touchedB && !retraceDeepEnough)
             {
                s.state = AB_INVALID;
                return;
             }
 
-            if(retraceDeepEnough && enoughCandles)
+            // اگر B همین حالا برداشته شد، اصلاح هر چه بوده تمام شده است؛
+            // پس حتی اگر به MinRetraceCandles نرسیده باشد C همانجا ثبت
+            // می‌شود تا شکست در ادامه به عنوان هانت شمرده شود.
+            if(retraceDeepEnough && (enoughCandles || touchedB))
                s.state = AB_RETRACED;
             else
                continue;
@@ -732,7 +743,12 @@ void EvaluateLifecycle(SwingAB &s, MqlRates &rates[], int rates_total, double av
                                   : (rates[last].low  < s.priceB);
          if(crossedB)
          {
-            if(s.state == AB_RETRACED)
+            // همان قاعده حلقه بالا: فقط نرسیدن به عمق ۲۰ درصد الگو را باطل
+            // می‌کند، نه کوتاه بودن اصلاح.
+            bool deepEnough = (s.state == AB_RETRACED) ||
+                              (s.isBull ? (deepestBody <= levelMin)
+                                        : (deepestBody >= levelMin));
+            if(deepEnough)
             {
                // نقدینگی برداشته شد — همان D
                s.state  = AB_BROKEN;
@@ -740,7 +756,6 @@ void EvaluateLifecycle(SwingAB &s, MqlRates &rates[], int rates_total, double av
             }
             else
             {
-               // B برداشته شد بدون اینکه اصلاح معتبری ثبت شده باشد
                s.state = AB_INVALID;
             }
          }
