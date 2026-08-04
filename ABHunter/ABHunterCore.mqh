@@ -197,6 +197,14 @@ bool ValidateAB(MqlRates &rates[], int idxA, int idxB,
       bool up = (rates[m].close > rates[m].open);
       bool dn = (rates[m].close < rates[m].open);
 
+      // کندلی که خود B را ساخته، کندل چرخش است. مخالف بودنش ذاتِ نقطه چرخش
+      // است نه ضعف ایمپالس؛ پس نه در تعداد و نه در حجم بدنه جریمه نمی‌شود.
+      // بدون این استثنا، یک لگ تمیز که با کندل برگشت تمام می‌شود دو بار
+      // جریمه می‌شد و رد می‌گشت. اگر همان کندل هم جهت لگ باشد عادی شمرده
+      // می‌شود؛ این استثنا فقط سمت مخالف را می‌بخشد.
+      bool isOpposite = isBullish ? dn : up;
+      if(isOpposite && m == idxB) continue;
+
       if(up) abBull++;
       if(dn) abBear++;
 
