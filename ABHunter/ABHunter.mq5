@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
-//|                                            ABHunter.mq5   v2.74   |
+//|                                            ABHunter.mq5   v2.75   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "2.74"
+#property version   "2.75"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
@@ -697,7 +697,28 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
 }
 //+------------------------------------------------------------------+
 
-void DeleteLowerTFObjects()
+// آیا این تایم فریم هنوز روی یکی از سه دکمه نشسته است؟
+bool IsSelectedTF(int tf)
+{
+   return (tf == (int)StructureTF || tf == (int)TriggerTF || tf == (int)EntryTF);
+}
+
+// پاک کردن آبجکت هایی که دیگر به کار نمی‌آیند.
+//
+// دو قاعده جدا:
+//
+//   ۱. تایم فریم پایین تر از چارت جاری: کار فراکتالی از بالا به پایین
+//      می‌آید، پس آنچه در تایم پایین تر رسم شده وقتی به تایم بالا برمی‌گردید
+//      فقط شلوغی است.
+//
+//   ۲. تایم فریم بالاتر از چارت جاری فقط تا وقتی می‌ماند که هنوز روی یکی از
+//      سه دکمه باشد. همین بند قبلا نبود و باگ می‌ساخت: با رفتن دکمه ساختار
+//      از H8 به H4، آبجکت های H8 نه پایین تر از چارت بودند که قاعده یک
+//      پاکشان کند، نه دیگر «فراکتال بالاتر» بودند — فقط ته مانده انتخاب
+//      قبلی. برعکسش (H4 به H8) مشکلی نداشت چون آنجا آبجکت کهنه پایین تر از
+//      چارت می‌افتاد و قاعده یک می‌گرفتش. همین باعث می‌شد ایراد فقط در یک
+//      جهت دیده شود.
+void DeleteStaleTFObjects()
 {
    int total = ObjectsTotal(0);
    int currentTF = Period();
@@ -716,8 +737,9 @@ void DeleteLowerTFObjects()
          int objTF = (int)StringToInteger(StringSubstr(name, p1 + 1, p2 - p1 - 1));
 
          // مقادیر ENUM_TIMEFRAMES با مدت زمان کندل هم‌ترتیب هستند
-         if(objTF < currentTF)
-            ObjectDelete(0, name);
+         if(objTF < currentTF)   { ObjectDelete(0, name); continue; }
+
+         if(!IsSelectedTF(objTF)) ObjectDelete(0, name);
       }
    }
 }
@@ -920,7 +942,7 @@ void MaybeAlert(SwingAB &s, TFCategory cat, ENUM_TIMEFRAMES tf, int rates_total)
 void ProcessIndicator()
 {
    CheckTFChangeAndDelete();
-   DeleteLowerTFObjects();
+   DeleteStaleTFObjects();
 
    TFCategory cat = GetCategory();
    if(cat == NONE) return;
