@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                                        ABHunterCore.mqh   v2.75   |
+//|                                        ABHunterCore.mqh   v2.77   |
 //|                                                                  |
 //| منطق مشترک تشخیص سویینگ و چرخه عمر الگوی ABCD.                   |
 //| هم ABHunter.mq5 (اندیکاتور چارت) و هم ABHunterScanner.mq5           |
@@ -33,7 +33,7 @@ int    ABCDHistoryBars      = 300;   // تعداد کندل تاریخچه بر�
 double RetraceMinPercent    = 20.0;  // حداقل درصد اصلاح از AB
 double RetraceMaxPercent    = 60.0;  // حداکثر درصد اصلاح (با بادی)
 int    BConfirmBars        = 3;     // کندل صفر تا چند کندل بعد، B را تثبیت می‌کند
-int    AConfirmBars        = 3;     // A از چند کندل ابتدای لگ گرفته شود (0 = فقط کندل اول)
+int    AConfirmBars        = 3;     // A از چند کندل ابتدای لگ *رسم* شود (0 = فقط کندل اول)
 int    MinRetraceCandles    = 3;     // حداقل کندل اصلاح، از کندل بعد از تثبیت B
 int    MaxRetraceBars       = 24;    // حداکثر کندل از B تا حالا (0 = بی نهایت)
 int    MaxPatternDays       = 0;     // سقف روز تقویمی (0 = خاموش؛ روی تایم بالا نگذارید)
@@ -94,7 +94,8 @@ string CoreConfigSignature()
    h = h * 31 + (long)(RetraceMinPercent * 10);
    h = h * 31 + (long)(RetraceMaxPercent * 10);
    h = h * 31 + BConfirmBars;
-   h = h * 31 + AConfirmBars;
+   // AConfirmBars عمدا اینجا نیست: فقط جای رسم A را عوض می‌کند و نمی‌تواند
+   // باعث شود اسکنر الگویی را گزارش کند که روی چارت نیست.
    h = h * 31 + MinRetraceCandles;
    h = h * 31 + MaxRetraceBars;
    h = h * 31 + MaxPatternDays;
@@ -159,11 +160,14 @@ string DeadReasonText(ABDeadReason r)
 struct SwingAB
 {
    int      idxA;
+   int      idxADraw;   // مبدا واقعی لگ — فقط برای رسم، در هیچ محاسبه ای نیست
    int      idxB;      // کندلی که سطح B روی آن است (ممکن است شدو باشد)
    int      idxZero;   // «کندل صفر»: آخرین کندل خود لگ
    datetime timeA;
    datetime timeB;
    double   priceA;
+   double   priceADraw; // قیمت همان نقطه رسم
+   datetime timeADraw;
    double   priceB;
    bool     isBull;
    double   size;       // |priceB - priceA|
@@ -558,55 +562,55 @@ int CollectSwings(MqlRates rates[], int rates_total, int scanFrom, SwingAB out[]
 
          priceA = isBullish ? rates[idxA].low : rates[idxA].high;
 
-         int    idxAPin   = idxA;
-         double priceAPin = priceA;
+         // اعتبارسنجی روی [idxA, idxZero] است نه [idxA, idxB]: کندل هایی که
+         // فقط با شدو B را جابجا کرده اند جزو خود لگ نیستند و نباید به عنوان
+         // کندل مخالف شمرده شوند.
+         //
+         // نامزد اول: A روی مبدا واقعی. اگر لگ از آنجا تمیز نبود، همان A
+         // کوتاه تر امتحان می‌شود تا هیچ سویینگی نسبت به قبل از دست نرود.
+         if(!ValidateAB(rates, idxA, idxZero, priceA, priceB, isBullish))
+         {
+            if(idxA == idxABase) continue;
+            if(!ValidateAB(rates, idxABase, idxZero, priceABase, priceB, isBullish)) continue;
 
-         // --- سطح A از یک پنجره کوتاه ابتدای لگ، نه فقط از خود همان کندل.
+            idxA   = idxABase;
+            priceA = priceABase;
+         }
+
+         // --- جای رسم A: مبدا واقعی لگ.
          //
-         // قبلا priceA دقیقا کف (یا سقف) همان اولین کندل هم جهت بود و بس.
-         // ولی مبدا لگ اغلب روی کندل بعدی می‌افتد: کندل اول صعودی است، بعدی
-         // با یک شدوی بلند پایین تر می‌رود و بعد حرکت شروع می‌شود. آن شدو
-         // مبدا واقعی است ولی هیچ قاعده ای A را به آنجا نمی‌برد — حتی
-         // ValidateAB هم نمی‌دیدش، چون در لگ صعودی فقط سقف ها را می‌سنجد.
+         // priceA بالا کف (یا سقف) همان اولین کندل هم جهت است. ولی مبدا
+         // دیداری لگ اغلب روی کندل بعدی می‌افتد: کندل اول صعودی است، کندل
+         // بعدی با یک شدوی بلند پایین تر می‌رود و بعد حرکت شروع می‌شود.
+         // ValidateAB هم آن را نمی‌بیند، چون در لگ صعودی فقط سقف ها را
+         // می‌سنجد.
          //
-         // پنجره عمدا کوتاه است و دقیقا قرینه قاعده B (کندل صفر تا سه کندل
-         // بعد) کار می‌کند. اگر کل لگ گشته می‌شد، یک اصلاح عمیق وسط لگ A را
-         // به وسط سویینگ می‌کشید — همان چیزی که قبلا ایراد گرفتید.
+         // این مقدار عمدا فقط برای رسم است و در هیچ محاسبه ای وارد نمی‌شود:
+         // size، خطوط ۲۰ و ۶۰ درصد، قاعده CD > AB و «رسیدن قیمت به A» همگی
+         // روی priceA می‌مانند. پس این تغییر نمی‌تواند هیچ الگویی را از
+         // تشخیص یا از چرخه عمر بیندازد — فقط نقطه A سر جای درستش رسم
+         // می‌شود.
+         //
+         // پنجره کوتاه است و قرینه قاعده B کار می‌کند. اگر کل لگ گشته
+         // می‌شد، یک اصلاح عمیق وسط لگ A را به وسط سویینگ می‌کشید.
+         int idxADraw = idxA;
          int aWindowEnd = idxA + AConfirmBars;
          if(aWindowEnd > idxZero) aWindowEnd = idxZero;
 
          for(int m = idxA + 1; m <= aWindowEnd; m++)
          {
-            if(isBullish) { if(rates[m].low  < priceA) { priceA = rates[m].low;  idxA = m; } }
-            else          { if(rates[m].high > priceA) { priceA = rates[m].high; idxA = m; } }
+            if(isBullish) { if(rates[m].low  < rates[idxADraw].low)  idxADraw = m; }
+            else          { if(rates[m].high > rates[idxADraw].high) idxADraw = m; }
          }
 
-         // اعتبارسنجی روی [idxA, idxZero] است نه [idxA, idxB]: کندل هایی که
-         // فقط با شدو B را جابجا کرده اند جزو خود لگ نیستند و نباید به عنوان
-         // کندل مخالف شمرده شوند.
-         //
-         // سه نامزد به ترتیب: A با پنجره، A فقط روی اولین کندل هم جهت، و A
-         // روی مبدا خام. هر کدام اول قبول شد همان می‌ماند. زنجیره عمدا این
-         // شکلی است تا این تغییر نتواند سویینگی را که قبلا پیدا می‌شد از بین
-         // ببرد — همان درسی که نسخه 2.50 داد.
-         if(!ValidateAB(rates, idxA, idxZero, priceA, priceB, isBullish))
-         {
-            if(idxA != idxAPin &&
-               ValidateAB(rates, idxAPin, idxZero, priceAPin, priceB, isBullish))
-            {
-               idxA   = idxAPin;
-               priceA = priceAPin;
-            }
-            else if(idxAPin != idxABase &&
-                    ValidateAB(rates, idxABase, idxZero, priceABase, priceB, isBullish))
-            {
-               idxA   = idxABase;
-               priceA = priceABase;
-            }
-            else continue;
-         }
+         double priceADraw = isBullish ? rates[idxADraw].low : rates[idxADraw].high;
+         if(isBullish) { if(priceADraw > priceA) priceADraw = priceA; }
+         else          { if(priceADraw < priceA) priceADraw = priceA; }
 
          out[cnt].idxA          = idxA;
+         out[cnt].idxADraw      = idxADraw;
+         out[cnt].timeADraw     = rates[idxADraw].time;
+         out[cnt].priceADraw    = priceADraw;
          out[cnt].idxB          = idxB;
          out[cnt].idxZero       = idxZero;
          out[cnt].timeA         = rates[idxA].time;

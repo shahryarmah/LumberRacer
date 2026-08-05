@@ -150,9 +150,9 @@ static void Run(const char *title)
    printf("  BuildActiveSwings -> %d\n", nAct);
 
    for(int k = 0; k < nAct; k++)
-      printf("    act[%d] %s A=%d Z=%d B=%d state=%-7s C=%-3d %s\n",
-             k, act[k].isBull ? "BULL" : "BEAR", act[k].idxA, act[k].idxZero,
-             act[k].idxB, StateName(act[k].state), act[k].idxC,
+      printf("    act[%d] %s A=%d Adraw=%d Z=%d B=%d state=%-7s C=%-3d %s\n",
+             k, act[k].isBull ? "BULL" : "BEAR", act[k].idxA, act[k].idxADraw,
+             act[k].idxZero, act[k].idxB, StateName(act[k].state), act[k].idxC,
              DeadReasonText(act[k].deadReason).c_str());
 
    // why did a raw swing die?
@@ -399,11 +399,11 @@ int main()
 
       printf("\n  (first bullish low = %.5f, true origin wick = %.5f)\n",
              firstBullLow, deepLow);
-      Run("A must take the deeper wick just after the first bullish candle");
+      Run("A drawn on the deeper wick just after the first bullish candle");
 
       int saved = AConfirmBars;
       AConfirmBars = 0;                 // رفتار نسخه 2.75
-      Run("same bars with AConfirmBars=0 (the old behaviour)");
+      Run("same bars with AConfirmBars=0 (Adraw must fall back to A)");
       AConfirmBars = saved;
    }
 

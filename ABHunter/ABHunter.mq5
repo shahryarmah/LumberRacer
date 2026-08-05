@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
-//|                                            ABHunter.mq5   v2.76   |
+//|                                            ABHunter.mq5   v2.77   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "2.76"
+#property version   "2.77"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
@@ -791,7 +791,10 @@ void DrawSwing(SwingAB &s, TFCategory cat, ENUM_TIMEFRAMES tf, color drawColor, 
 
    // --- خط AB: در حال تشکیل خط‌چین، بعد از قطعی شدن ممتد
    if(ObjectFind(0, lineName) >= 0) ObjectDelete(0, lineName);
-   ObjectCreate(0, lineName, OBJ_TREND, 0, s.timeA, s.priceA, s.timeB, s.priceB);
+   // خط AB و برچسب A از نقطه رسم استفاده می‌کنند، نه از priceA محاسباتی.
+   // بقیه رسم ها (خط میانی، خطوط ۲۰ و ۶۰ درصد) روی priceA می‌مانند تا با
+   // چیزی که چرخه عمر واقعا می‌سنجد یکی باشند.
+   ObjectCreate(0, lineName, OBJ_TREND, 0, s.timeADraw, s.priceADraw, s.timeB, s.priceB);
    ObjectSetInteger(0, lineName, OBJPROP_COLOR, drawColor);
    ObjectSetInteger(0, lineName, OBJPROP_WIDTH, 2);
    ObjectSetInteger(0, lineName, OBJPROP_RAY_RIGHT, false);
@@ -799,7 +802,7 @@ void DrawSwing(SwingAB &s, TFCategory cat, ENUM_TIMEFRAMES tf, color drawColor, 
 
    // --- لیبل های A و B
    if(ObjectFind(0, labelA) >= 0) ObjectDelete(0, labelA);
-   ObjectCreate(0, labelA, OBJ_TEXT, 0, s.timeA + tfSecs * LabelShiftCandles, s.priceA);
+   ObjectCreate(0, labelA, OBJ_TEXT, 0, s.timeADraw + tfSecs * LabelShiftCandles, s.priceADraw);
    ObjectSetInteger(0, labelA, OBJPROP_COLOR, LabelColor);
    ObjectSetString(0, labelA, OBJPROP_TEXT, "A");
 
