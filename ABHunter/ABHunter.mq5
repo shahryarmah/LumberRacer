@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
-//|                                            ABHunter.mq5   v2.73   |
+//|                                            ABHunter.mq5   v2.74   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "2.73"
+#property version   "2.74"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
@@ -61,6 +61,23 @@ input color  CandleTimerColor     = clrGray;   // رنگ تایمر
 // شکست و کندل سیگنال باید به این تایم فریم پایین تر رفت.
 input bool   ShowFractalTF        = true;         // نمایش تایم فریم فراکتال زیر تایمر
 input color  FractalTFColor       = clrSteelBlue; // رنگ تایم فریم فراکتال
+
+//---- سشن معاملاتی
+// زیر تایم فریم فراکتال نوشته می‌شود: کدام سشن ها باز اند و چقدر تا تغییر
+// بعدی مانده. مبنا ساعت GMT است نه ساعت سرور بروکر، چون ساعت سرور از بروکری
+// به بروکر دیگر فرق می‌کند ولی جدول سشن ها همه جا با GMT نوشته می‌شود.
+input bool   ShowSession          = true;          // نمایش سشن معاملاتی زیر تایمر
+input color  SessionColor         = clrDarkOrange; // رنگ سشن
+// ساعت باز و بسته شدن هر سشن به وقت GMT. اگر تقویم تابستانی جابجایشان کرد،
+// همین جا یک ساعت عقب/جلو ببرید.
+input int    SydneyOpenGMT        = 21;
+input int    SydneyCloseGMT       = 6;
+input int    TokyoOpenGMT         = 0;
+input int    TokyoCloseGMT        = 9;
+input int    LondonOpenGMT        = 7;
+input int    LondonCloseGMT       = 16;
+input int    NewYorkOpenGMT       = 12;
+input int    NewYorkCloseGMT      = 21;
 
 //---- الگوهای باطل شده
 // الگوی مرده بی سروصدا حذف نمی‌شود؛ تا انتهای همان روز خاکستری روی چارت
@@ -387,6 +404,106 @@ void UpdateFractalTFLabel()
    ObjectSetInteger(0, name, OBJPROP_COLOR, FractalTFColor);
    ObjectSetString(0, name, OBJPROP_TEXT, "F: " + frac);
 }
+
+//+------------------------------------------------------------------+
+// آیا ساعت GMT داده شده داخل پنجره سشن است؟
+// پنجره ای که از نیمه شب رد می‌شود (مثل سیدنی 21 تا 6) هم پشتیبانی می‌شود.
+bool InSessionWindow(int hour, int openH, int closeH)
+{
+   if(openH == closeH) return false;
+   if(openH <  closeH) return (hour >= openH && hour < closeH);
+   return (hour >= openH || hour < closeH);
+}
+
+// سشن های باز در یک ساعت مشخص GMT، به صورت "LDN+NY"
+string SessionsAtHour(int hour)
+{
+   string s = "";
+   if(InSessionWindow(hour, SydneyOpenGMT,  SydneyCloseGMT))
+      s = s + (StringLen(s) > 0 ? "+" : "") + "SYD";
+   if(InSessionWindow(hour, TokyoOpenGMT,   TokyoCloseGMT))
+      s = s + (StringLen(s) > 0 ? "+" : "") + "TOK";
+   if(InSessionWindow(hour, LondonOpenGMT,  LondonCloseGMT))
+      s = s + (StringLen(s) > 0 ? "+" : "") + "LDN";
+   if(InSessionWindow(hour, NewYorkOpenGMT, NewYorkCloseGMT))
+      s = s + (StringLen(s) > 0 ? "+" : "") + "NY";
+   return s;
+}
+
+// تعطیلی آخر هفته فارکس: از بسته شدن نیویورک جمعه تا باز شدن سیدنی یکشنبه
+bool ForexClosedNow(MqlDateTime &g)
+{
+   if(g.day_of_week == 6) return true;
+   if(g.day_of_week == 5 && g.hour >= NewYorkCloseGMT) return true;
+   if(g.day_of_week == 0 && g.hour <  SydneyOpenGMT)   return true;
+   return false;
+}
+
+//+------------------------------------------------------------------+
+// سشن معاملاتی، زیر تایم فریم فراکتال.
+// قالب: "S: LDN+NY > NY 01:23" یعنی الان لندن و نیویورک باز اند و ۱ ساعت و
+// ۲۳ دقیقه دیگر لندن بسته می‌شود و فقط نیویورک می‌ماند.
+void UpdateSessionLabel()
+{
+   string name = "ABH_Sess_" + IntegerToString(ChartID());
+
+   if(!ShowSession)
+   {
+      if(ObjectFind(0, name) >= 0) ObjectDelete(0, name);
+      return;
+   }
+
+   MqlDateTime g;
+   TimeToStruct(TimeGMT(), g);
+
+   string txt;
+
+   if(ForexClosedNow(g))
+   {
+      txt = "S: weekend";
+   }
+   else
+   {
+      string nowSet = SessionsAtHour(g.hour);
+      string shown  = (StringLen(nowSet) > 0) ? nowSet : "-";
+
+      // همه مرزهای سشن سر ساعت اند، پس کافی است ۲۴ ساعت بعدی نگاه شود.
+      int    aheadH  = 0;
+      string nextSet = "";
+
+      for(int h = 1; h <= 24; h++)
+      {
+         string s = SessionsAtHour((g.hour + h) % 24);
+         if(s == nowSet) continue;
+         aheadH  = h;
+         nextSet = (StringLen(s) > 0) ? s : "-";
+         break;
+      }
+
+      txt = "S: " + shown;
+
+      if(aheadH > 0)
+      {
+         long rem = (long)aheadH * 3600 - (long)g.min * 60 - (long)g.sec;
+         txt = txt + " > " + nextSet +
+               StringFormat(" %02d:%02d", (int)(rem / 3600), (int)((rem % 3600) / 60));
+      }
+   }
+
+   if(ObjectFind(0, name) < 0)
+   {
+      ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
+      ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+      ObjectSetInteger(0, name, OBJPROP_XDISTANCE, 10);
+      // تایمر 100، فراکتال 118، سشن یک خط پایین تر
+      ObjectSetInteger(0, name, OBJPROP_YDISTANCE, 134);
+      ObjectSetInteger(0, name, OBJPROP_FONTSIZE, 10);
+      ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+   }
+
+   ObjectSetInteger(0, name, OBJPROP_COLOR, SessionColor);
+   ObjectSetString(0, name, OBJPROP_TEXT, txt);
+}
 //+------------------------------------------------------------------+
 
 int OnInit()
@@ -436,6 +553,7 @@ int OnInit()
 
    UpdateCandleTimer();
    UpdateFractalTFLabel();
+   UpdateSessionLabel();
    ChartRedraw();
    return(INIT_SUCCEEDED);
 }
@@ -892,6 +1010,7 @@ void OnTimer()
    ProcessIndicator();
    UpdateCandleTimer();
    UpdateFractalTFLabel();
+   UpdateSessionLabel();
    ChartRedraw();
 }
 
@@ -919,7 +1038,8 @@ void OnDeinit(const int reason)
             StringFind(name, "ABH_State_") == 0 ||
             StringFind(name, "ABH_Cfg_") == 0 ||
             StringFind(name, "ABH_Timer_") == 0 ||
-            StringFind(name, "ABH_Fract_") == 0)
+            StringFind(name, "ABH_Fract_") == 0 ||
+            StringFind(name, "ABH_Sess_") == 0)
          {
             ObjectDelete(0, name);
          }

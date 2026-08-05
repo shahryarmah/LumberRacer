@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                                     ABHunterScanner.mq5   v2.73   |
+//|                                     ABHunterScanner.mq5   v2.74   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
@@ -17,7 +17,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "2.73"
+#property version   "2.74"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
@@ -57,6 +57,15 @@ input int    RefreshSeconds    = 60;   // فاصله هر اسکن کامل (ث�
 input bool   EnablePush        = true; // نوتیفیکیشن موبایل برای هر AB جدید قطعی شده
 input PanelFilterMode NotifyFilter = FILTER_ALL;       // برای کدام وضعیت ها اطلاع بدهد
 
+// مقصد کلیک روی ردیف جدول
+enum ClickTargetMode
+{
+   CLICK_OFF,            // کلیک ردیف کاری نکند
+   CLICK_HUNTER_CHART,   // چارتی که ABHunter رویش نصب است (اگر نبود، همین چارت)
+   CLICK_THIS_CHART,     // همین چارتی که اسکنر رویش است
+   CLICK_NEW_CHART       // یک چارت تازه باز شود
+};
+
 //---- جدول
 input PanelFilterMode PanelFilter = FILTER_ALL;       // کدام وضعیت ها در جدول بیایند
 input PanelCornerMode PanelCorner = PANEL_TOP_RIGHT; // جدول در کدام گوشه باشد
@@ -76,6 +85,14 @@ input color  PanelBackColor    = clrBlack;
 input color  PanelBorderColor  = clrDimGray; // رنگ قاب جدول
 input int    PanelMaxRows      = 100;  // سقف ردیف؛ به هر حال از ارتفاع چارت بیشتر نمی‌شود
 input bool   GroupBySymbol     = true; // نمادی که در چند تایم فریم الگو دارد یک ردیف کشویی شود
+
+//---- کلیک روی ردیف
+// کلیک روی یک ردیف عادی، چارت را به همان نماد و تایم فریم می‌برد.
+// کلیک روی سربرگ گروه (ردیفی که با + یا - شروع می‌شود) کار قبلی اش را
+// می‌کند و فقط تایم فریم های آن نماد را باز و بسته می‌کند؛ برای رفتن به
+// چارت باید گروه را باز کنید و روی خود تایم فریم کلیک کنید.
+input ClickTargetMode ClickTarget = CLICK_HUNTER_CHART; // کلیک روی ردیف چه چارتی را عوض کند
+input bool   ClickSetsHunterTF   = true;  // دکمه تایم فریم اندیکاتور هم روی همان تایم فریم تنظیم شود
 
 //+------------------------------------------------------------------+
 // یک ردیف جدول
@@ -141,6 +158,8 @@ string   livePrefix[];
 color    liveColor[];
 int      liveRow[];
 string   liveGroup[];   // اگر سربرگ گروه باشد، نام نماد؛ وگرنه خالی
+string   liveNavSym[]; // نماد واقعی ردیف، برای کلیک (برخلاف liveSymbol هیچ وقت خالی نیست)
+ENUM_TIMEFRAMES liveNavTF[];
 int      liveCount   = 0;
 
 // نمادهایی که کاربر بازشان کرده است
@@ -672,6 +691,8 @@ void DrawDataRow(ScanRow &r, int row, string symCell, string tfCell,
    liveColor[liveCount]  = rowColor;
    liveRow[liveCount]    = row;
    liveGroup[liveCount]  = isGroup ? r.symbol : "";
+   liveNavSym[liveCount] = r.symbol;
+   liveNavTF[liveCount]  = r.tf;
    liveCount++;
 }
 
@@ -880,7 +901,9 @@ void DrawPanel()
    ArrayResize(liveRow,    rowLimit + 4);
    liveCount = 0;
 
-   ArrayResize(liveGroup, rowLimit + 4);
+   ArrayResize(liveGroup,  rowLimit + 4);
+   ArrayResize(liveNavSym, rowLimit + 4);
+   ArrayResize(liveNavTF,  rowLimit + 4);
    liveCount = 0;
 
    int shown = 0;
@@ -1185,6 +1208,102 @@ void OnTimer()
 }
 
 //+------------------------------------------------------------------+
+// جای یک تایم فریم در یکی از سه لیست دکمه های اندیکاتور. -1 یعنی نیست.
+// تعداد عمدا جدا پاس داده می‌شود و از ArraySize روی پارامتر آرایه استفاده
+// نمی‌کنیم، تا شیم ++C که برای بررسی نحوی داریم هم بتواند بخواندش.
+int IndexInTFList(ENUM_TIMEFRAMES &list[], int count, ENUM_TIMEFRAMES tf)
+{
+   for(int i = 0; i < count; i++)
+      if(list[i] == tf) return i;
+   return -1;
+}
+
+// دکمه تایم فریم اندیکاتور روی چارت مقصد را روی tf می‌گذارد.
+//
+// بدون این کار، عوض کردن تایم فریم چارت اغلب به چارت خالی می‌رسد:
+// ABHunter فقط وقتی رسم می‌کند که تایم فریم چارت با یکی از سه دکمه اش یکی
+// باشد (GetCategory)، و لیست اسکن معمولا تایم فریم های بیشتری دارد.
+//
+// اندیکاتور این انتخاب را در آبجکت ABH_State_<chartID> نگه می‌دارد و در
+// OnInit می‌خواندش. عوض کردن تایم فریم چارت خودش OnInit را دوباره صدا
+// می‌زند، پس اگر آبجکت را *قبل* از تعویض بنویسیم، اندیکاتور همان را
+// برمی‌دارد. OnDeinit هم فقط موقع حذف یا بسته شدن چارت پاکش می‌کند، نه
+// موقع تعویض تایم فریم.
+void PointHunterTF(long chartId, ENUM_TIMEFRAMES tf)
+{
+   string obj = StateObjectName(chartId);
+   if(ObjectFind(chartId, obj) < 0) return;
+
+   string txt = ObjectGetString(chartId, obj, OBJPROP_TEXT);
+   int p1 = StringFind(txt, "|");
+   int p2 = (p1 >= 0) ? StringFind(txt, "|", p1 + 1) : -1;
+   if(p1 < 0 || p2 <= p1) return;
+
+   int i1 = (int)StringToInteger(StringSubstr(txt, 0, p1));
+   int i2 = (int)StringToInteger(StringSubstr(txt, p1 + 1, p2 - (p1 + 1)));
+   int i3 = (int)StringToInteger(StringSubstr(txt, p2 + 1));
+
+   // بعضی تایم فریم ها در دو لیست هستند (مثلا H1 هم ساختار هم تریگر).
+   // اولویت با ساختار است، بعد تریگر، بعد ورود.
+   int k = IndexInTFList(StructureTFList, ArraySize(StructureTFList), tf);
+   if(k >= 0) i1 = k;
+   else
+   {
+      k = IndexInTFList(TriggerTFList, ArraySize(TriggerTFList), tf);
+      if(k >= 0) i2 = k;
+      else
+      {
+         k = IndexInTFList(EntryTFList, ArraySize(EntryTFList), tf);
+         if(k < 0) return;   // این تایم فریم روی هیچ دکمه ای نیست
+         i3 = k;
+      }
+   }
+
+   ObjectSetString(chartId, obj, OBJPROP_TEXT,
+                   IntegerToString(i1) + "|" + IntegerToString(i2) + "|" +
+                   IntegerToString(i3));
+}
+
+// بردن چارت به نماد و تایم فریم یک ردیف
+void NavigateTo(string sym, ENUM_TIMEFRAMES tf)
+{
+   if(ClickTarget == CLICK_OFF) return;
+
+   if(ClickTarget == CLICK_NEW_CHART)
+   {
+      ChartOpen(sym, tf);
+      return;   // روی چارت تازه اندیکاتوری نیست، پس تنظیم دکمه معنا ندارد
+   }
+
+   long target = 0;   // صفر یعنی همین چارتی که اسکنر رویش است
+
+   if(ClickTarget == CLICK_HUNTER_CHART)
+   {
+      // اولین چارتی که ABHunter رویش نصب است و خودمان نیستیم.
+      // ChartFirst/ChartNext فقط چارت های پروفایل جاری را می‌گردند، پس اگر
+      // اسکنر روی پروفایل جدا باشد چیزی پیدا نمی‌شود و به همین چارت
+      // برمی‌گردیم.
+      long id = ChartFirst();
+      while(id >= 0)
+      {
+         if(id != ChartID() && ObjectFind(id, StateObjectName(id)) >= 0)
+         {
+            target = id;
+            break;
+         }
+         id = ChartNext(id);
+      }
+   }
+
+   // مقصد که خود چارت اسکنر باشد، متاتریدر اندیکاتور را دوباره راه اندازی
+   // می‌کند: جدول یک لحظه پاک می‌شود و با اسکن بعدی برمی‌گردد.
+   if(ClickSetsHunterTF && target != 0) PointHunterTF(target, tf);
+
+   ChartSetSymbolPeriod(target, sym, tf);
+   if(target != 0) ChartRedraw(target);
+}
+
+//+------------------------------------------------------------------+
 void OnChartEvent(const int id, const long &lparam, const double &dparam,
                   const string &sparam)
 {
@@ -1192,7 +1311,6 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam,
    // اسکن بعدی صبر می‌کردید تا تعداد ردیف ها با ارتفاع جدید جور شود.
    if(id == CHARTEVENT_CHART_CHANGE) { DrawPanel(); return; }
 
-   // کلیک روی سربرگ یک گروه، فهرست تایم فریم هایش را باز و بسته می‌کند
    if(id != CHARTEVENT_OBJECT_CLICK) return;
 
    string rowPrefix = objPrefix + "R";
@@ -1203,10 +1321,19 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam,
    for(int i = 0; i < liveCount; i++)
    {
       if(liveRow[i] != clicked) continue;
-      if(StringLen(liveGroup[i]) == 0) return;   // ردیف عادی، کاری ندارد
 
-      ToggleExpanded(liveGroup[i]);
-      DrawPanel();
+      // سربرگ گروه (ردیفی که با + یا - شروع می‌شود) فقط باز و بسته می‌کند.
+      // عمدا چارت را عوض نمی‌کند تا با کلیک رفتن به چارت قاطی نشود؛ برای
+      // نمادی که چند تایم فریم دارد، گروه را باز کنید و روی خود تایم فریم
+      // کلیک کنید.
+      if(StringLen(liveGroup[i]) > 0)
+      {
+         ToggleExpanded(liveGroup[i]);
+         DrawPanel();
+         return;
+      }
+
+      NavigateTo(liveNavSym[i], liveNavTF[i]);
       return;
    }
 }
