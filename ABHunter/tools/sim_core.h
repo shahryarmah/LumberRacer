@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                                        ABHunterCore.mqh   v2.73   |
+//|                                        ABHunterCore.mqh   v2.75   |
 //|                                                                  |
 //| منطق مشترک تشخیص سویینگ و چرخه عمر الگوی ABCD.                   |
 //| هم ABHunter.mq5 (اندیکاتور چارت) و هم ABHunterScanner.mq5           |
@@ -33,6 +33,7 @@ int    ABCDHistoryBars      = 300;   // تعداد کندل تاریخچه بر�
 double RetraceMinPercent    = 20.0;  // حداقل درصد اصلاح از AB
 double RetraceMaxPercent    = 60.0;  // حداکثر درصد اصلاح (با بادی)
 int    BConfirmBars        = 3;     // کندل صفر تا چند کندل بعد، B را تثبیت می‌کند
+int    AConfirmBars        = 3;     // A از چند کندل ابتدای لگ گرفته شود (0 = فقط کندل اول)
 int    MinRetraceCandles    = 3;     // حداقل کندل اصلاح، از کندل بعد از تثبیت B
 int    MaxRetraceBars       = 24;    // حداکثر کندل از B تا حالا (0 = بی نهایت)
 int    MaxPatternDays       = 0;     // سقف روز تقویمی (0 = خاموش؛ روی تایم بالا نگذارید)
@@ -93,6 +94,7 @@ string CoreConfigSignature()
    h = h * 31 + (long)(RetraceMinPercent * 10);
    h = h * 31 + (long)(RetraceMaxPercent * 10);
    h = h * 31 + BConfirmBars;
+   h = h * 31 + AConfirmBars;
    h = h * 31 + MinRetraceCandles;
    h = h * 31 + MaxRetraceBars;
    h = h * 31 + MaxPatternDays;
@@ -556,19 +558,52 @@ int CollectSwings(MqlRates rates[], int rates_total, int scanFrom, SwingAB out[]
 
          priceA = isBullish ? rates[idxA].low : rates[idxA].high;
 
+         int    idxAPin   = idxA;
+         double priceAPin = priceA;
+
+         // --- سطح A از یک پنجره کوتاه ابتدای لگ، نه فقط از خود همان کندل.
+         //
+         // قبلا priceA دقیقا کف (یا سقف) همان اولین کندل هم جهت بود و بس.
+         // ولی مبدا لگ اغلب روی کندل بعدی می‌افتد: کندل اول صعودی است، بعدی
+         // با یک شدوی بلند پایین تر می‌رود و بعد حرکت شروع می‌شود. آن شدو
+         // مبدا واقعی است ولی هیچ قاعده ای A را به آنجا نمی‌برد — حتی
+         // ValidateAB هم نمی‌دیدش، چون در لگ صعودی فقط سقف ها را می‌سنجد.
+         //
+         // پنجره عمدا کوتاه است و دقیقا قرینه قاعده B (کندل صفر تا سه کندل
+         // بعد) کار می‌کند. اگر کل لگ گشته می‌شد، یک اصلاح عمیق وسط لگ A را
+         // به وسط سویینگ می‌کشید — همان چیزی که قبلا ایراد گرفتید.
+         int aWindowEnd = idxA + AConfirmBars;
+         if(aWindowEnd > idxZero) aWindowEnd = idxZero;
+
+         for(int m = idxA + 1; m <= aWindowEnd; m++)
+         {
+            if(isBullish) { if(rates[m].low  < priceA) { priceA = rates[m].low;  idxA = m; } }
+            else          { if(rates[m].high > priceA) { priceA = rates[m].high; idxA = m; } }
+         }
+
          // اعتبارسنجی روی [idxA, idxZero] است نه [idxA, idxB]: کندل هایی که
          // فقط با شدو B را جابجا کرده اند جزو خود لگ نیستند و نباید به عنوان
          // کندل مخالف شمرده شوند.
          //
-         // نامزد اول: A روی مبدا واقعی. اگر لگ از آنجا تمیز نبود، همان A
-         // کوتاه تر امتحان می‌شود تا هیچ سویینگی نسبت به قبل از دست نرود.
+         // سه نامزد به ترتیب: A با پنجره، A فقط روی اولین کندل هم جهت، و A
+         // روی مبدا خام. هر کدام اول قبول شد همان می‌ماند. زنجیره عمدا این
+         // شکلی است تا این تغییر نتواند سویینگی را که قبلا پیدا می‌شد از بین
+         // ببرد — همان درسی که نسخه 2.50 داد.
          if(!ValidateAB(rates, idxA, idxZero, priceA, priceB, isBullish))
          {
-            if(idxA == idxABase) continue;
-            if(!ValidateAB(rates, idxABase, idxZero, priceABase, priceB, isBullish)) continue;
-
-            idxA   = idxABase;
-            priceA = priceABase;
+            if(idxA != idxAPin &&
+               ValidateAB(rates, idxAPin, idxZero, priceAPin, priceB, isBullish))
+            {
+               idxA   = idxAPin;
+               priceA = priceAPin;
+            }
+            else if(idxAPin != idxABase &&
+                    ValidateAB(rates, idxABase, idxZero, priceABase, priceB, isBullish))
+            {
+               idxA   = idxABase;
+               priceA = priceABase;
+            }
+            else continue;
          }
 
          out[cnt].idxA          = idxA;

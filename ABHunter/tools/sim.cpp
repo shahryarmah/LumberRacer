@@ -377,5 +377,35 @@ int main()
       MaxRetraceBars = savedRetraceBars;
    }
 
+   // --- 15: the leg's true origin is the candle AFTER the first bullish one:
+   //     a bearish candle whose long lower wick dips below it. A must land on
+   //     that wick, not on the first bullish candle's low (NDXUSD H6).
+   {
+      g_bars.clear();
+      double px = 1.00000;
+      for(int i = 0; i < 6; i++) Flat(px, 0.00020);
+
+      Impulse(px, 0.00060, 0.00010, true);       // اولین کندل هم جهت
+      double firstBullLow = px - 0.00060 - 0.00010;
+
+      double o = px;                              // کندل نزولی با شدوی بلند
+      double c = px - 0.00030;
+      double deepLow = firstBullLow - 0.00090;    // مبدا واقعی لگ
+      Bar(o, o + 0.00010, deepLow, c);
+      px = c;
+
+      for(int i = 0; i < 5; i++) Impulse(px, 0.00200, 0.00020, true);
+      for(int i = 0; i < 6; i++) Impulse(px, 0.00080, 0.00015, false);
+
+      printf("\n  (first bullish low = %.5f, true origin wick = %.5f)\n",
+             firstBullLow, deepLow);
+      Run("A must take the deeper wick just after the first bullish candle");
+
+      int saved = AConfirmBars;
+      AConfirmBars = 0;                 // رفتار نسخه 2.75
+      Run("same bars with AConfirmBars=0 (the old behaviour)");
+      AConfirmBars = saved;
+   }
+
    return 0;
 }

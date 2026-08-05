@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                                     ABHunterScanner.mq5   v2.75   |
+//|                                     ABHunterScanner.mq5   v2.76   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
@@ -17,7 +17,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "2.75"
+#property version   "2.76"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
