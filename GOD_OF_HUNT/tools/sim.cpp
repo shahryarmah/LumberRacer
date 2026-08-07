@@ -460,5 +460,62 @@ int main()
          printf("    !! FAIL: forming candle must not be a child\n");
    }
 
+   // --- 17: TICK FRACTAL — سویینگ نزولی شارپ + IB + سیگنال زیر لوی مادر.
+   {
+      g_bars.clear();
+
+      Bar(1.0000, 1.0005, 0.9995, 1.0000);   // 0: خنثی، زنجیره را می‌بندد
+      Bar(1.0000, 1.0002, 0.9948, 0.9950);   // 1: نزولی، بادی 50/54 = 93%
+      Bar(0.9950, 0.9952, 0.9898, 0.9900);   // 2: نزولی، لوی پایین تر
+      Bar(0.9900, 0.9902, 0.9848, 0.9850);   // 3: مادر — نزولی، بادی 93%
+      Bar(0.9870, 0.9880, 0.9855, 0.9860);   // 4: فرزند اکیدا داخل مادر
+      Bar(0.9860, 0.9885, 0.9852, 0.9870);   // 5: داخل رنج مادر، سیگنال نیست
+      Bar(0.9870, 0.9875, 0.9850, 0.9855);   // 6: هنوز سیگنال نیست
+      Bar(0.9855, 0.9862, 0.9835, 0.9840);   // 7: کلوز 0.9840 < لوی مادر 0.9848 -> سیگنال
+      Bar(0.9840, 0.9850, 0.9830, 0.9845);   // 8: کندل جاری
+
+      int n = (int)g_bars.size();
+      static TickFractal tks[8192];
+      int nTK = CollectTickFractals(g_bars.data(), n, tks);
+
+      printf("\n=== tick fractal detection   (%d bars)\n", n);
+      printf("  CollectTickFractals -> %d  (expected 1)\n", nTK);
+      for(int k = 0; k < nTK; k++)
+         printf("    tk[%d] %s mother=%d child=%d signal=%d p1=%.4f p2=%.4f p3=%.4f age=%d\n",
+                k, tks[k].isBull ? "BULL" : "BEAR", tks[k].idxMother,
+                tks[k].idxChild, tks[k].idxSignal, tks[k].p1, tks[k].p2,
+                tks[k].p3, tks[k].ageCandles);
+
+      if(nTK != 1 || tks[0].idxMother != 3 || tks[0].idxChild != 4 ||
+         tks[0].idxSignal != 7 || tks[0].isBull)
+         printf("    !! FAIL: wrong tick fractal\n");
+      else if(tks[0].p1 != 0.9848 || tks[0].p2 != 0.9855 || tks[0].p3 != 0.9835)
+         printf("    !! FAIL: tick line must connect the three lows\n");
+
+      // بادی مادر زیر آستانه: الگو باید رد شود
+      double savedBody = TickMotherBodyPercent;
+      TickMotherBodyPercent = 95.0;
+      nTK = CollectTickFractals(g_bars.data(), n, tks);
+      printf("  TickMotherBodyPercent=95 -> %d  (expected 0)\n", nTK);
+      if(nTK != 0) printf("    !! FAIL: mother body rule ignored\n");
+      TickMotherBodyPercent = savedBody;
+
+      // سویینگ کوتاه: با حداقل ۴ کندل هم جهت، سویینگ سه کندلی باید رد شود
+      int savedMin = TickSwingMinCandles;
+      TickSwingMinCandles = 4;
+      nTK = CollectTickFractals(g_bars.data(), n, tks);
+      printf("  TickSwingMinCandles=4 -> %d  (expected 0)\n", nTK);
+      if(nTK != 0) printf("    !! FAIL: swing length rule ignored\n");
+      TickSwingMinCandles = savedMin;
+
+      // پنجره سیگنال: با سقف ۲ کندل بعد از فرزند، سیگنال کندل ۷ دیر است
+      int savedWin = TickSignalMaxCandles;
+      TickSignalMaxCandles = 2;
+      nTK = CollectTickFractals(g_bars.data(), n, tks);
+      printf("  TickSignalMaxCandles=2 -> %d  (expected 0)\n", nTK);
+      if(nTK != 0) printf("    !! FAIL: signal window rule ignored\n");
+      TickSignalMaxCandles = savedWin;
+   }
+
    return 0;
 }

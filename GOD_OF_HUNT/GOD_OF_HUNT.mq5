@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
-//|                                            GOD_OF_HUNT.mq5   v1.01   |
+//|                                            GOD_OF_HUNT.mq5   v1.02   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "1.01"
+#property version   "1.02"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
@@ -57,6 +57,11 @@ input bool   EnableAlerts         = false; // هشدار در لحظات کلی�
 input color  IBColor              = clrGold; // رنگ خطوط Inside Bar
 input int    IBLineCandles        = 5;       // طول خط ها بعد از کندل فرزند (بر حسب کندل)
 input bool   IBShowChildLines     = true;    // خطوط های و لوی کندل فرزند هم رسم شود
+
+//---- الگوی TICK FRACTAL (رسم)
+// تشخیص در GOD_OF_HUNT_Core است (Tick*)؛ این فقط رسم است.
+input color  TickColor            = clrMagenta; // رنگ خط تیک
+input int    TickLineWidth        = 2;          // ضخامت خط تیک
 
 //---- تایمر کندل
 input bool   ShowCandleTimer      = true;      // نمایش زمان باقی مانده تا بسته شدن کندل
@@ -422,7 +427,7 @@ void UpdateCandleTimer()
       ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
       ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
       ObjectSetInteger(0, name, OBJPROP_XDISTANCE, 10);
-      ObjectSetInteger(0, name, OBJPROP_YDISTANCE, 160);
+      ObjectSetInteger(0, name, OBJPROP_YDISTANCE, 190);
       ObjectSetInteger(0, name, OBJPROP_FONTSIZE, 11);
       ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
    }
@@ -451,8 +456,8 @@ void UpdateFractalTFLabel()
       ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
       ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
       ObjectSetInteger(0, name, OBJPROP_XDISTANCE, 10);
-      // تایمر روی 160 با فونت 11 است، پس یک خط پایین تر
-      ObjectSetInteger(0, name, OBJPROP_YDISTANCE, 178);
+      // تایمر روی 190 با فونت 11 است، پس یک خط پایین تر
+      ObjectSetInteger(0, name, OBJPROP_YDISTANCE, 208);
       ObjectSetInteger(0, name, OBJPROP_FONTSIZE, 10);
       ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
    }
@@ -551,8 +556,8 @@ void UpdateSessionLabel()
       ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
       ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
       ObjectSetInteger(0, name, OBJPROP_XDISTANCE, 10);
-      // تایمر 160، فراکتال 178، سشن یک خط پایین تر
-      ObjectSetInteger(0, name, OBJPROP_YDISTANCE, 194);
+      // تایمر 190، فراکتال 208، سشن یک خط پایین تر
+      ObjectSetInteger(0, name, OBJPROP_YDISTANCE, 224);
       ObjectSetInteger(0, name, OBJPROP_FONTSIZE, 10);
       ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
    }
@@ -1051,6 +1056,37 @@ void DrawInsideBar(InsideBar &ib, TFCategory cat, ENUM_TIMEFRAMES tf, int tfSecs
 //+------------------------------------------------------------------+
 // هشدار لحظات کلیدی. فقط برای رویدادی که روی آخرین کندل بسته شده رخ داده،
 // بنابراین هر رویداد دقیقا یک بار هشدار می‌دهد.
+void DrawTickFractal(TickFractal &tk, TFCategory cat, ENUM_TIMEFRAMES tf)
+{
+   // دو پاره خط مادر→فرزند→سیگنال. در سویینگ نزولی از لوها و در صعودی از
+   // های ها — همان شکلی که اسم الگو از آن می‌آید.
+   string base = GetTFPrefix(cat, tf) + "TK" + IntegerToString((long)tk.timeSignal);
+
+   string seg1 = base + "_S1";
+   if(ObjectFind(0, seg1) >= 0) ObjectDelete(0, seg1);
+   ObjectCreate(0, seg1, OBJ_TREND, 0, tk.timeMother, tk.p1, tk.timeChild, tk.p2);
+   ObjectSetInteger(0, seg1, OBJPROP_COLOR, TickColor);
+   ObjectSetInteger(0, seg1, OBJPROP_WIDTH, TickLineWidth);
+   ObjectSetInteger(0, seg1, OBJPROP_RAY_RIGHT, false);
+
+   string seg2 = base + "_S2";
+   if(ObjectFind(0, seg2) >= 0) ObjectDelete(0, seg2);
+   ObjectCreate(0, seg2, OBJ_TREND, 0, tk.timeChild, tk.p2, tk.timeSignal, tk.p3);
+   ObjectSetInteger(0, seg2, OBJPROP_COLOR, TickColor);
+   ObjectSetInteger(0, seg2, OBJPROP_WIDTH, TickLineWidth);
+   ObjectSetInteger(0, seg2, OBJPROP_RAY_RIGHT, false);
+
+   // برچسب کنار نقطه سیگنال، بیرون از خود کندل
+   string lbl = base + "_LBL";
+   if(ObjectFind(0, lbl) >= 0) ObjectDelete(0, lbl);
+   ObjectCreate(0, lbl, OBJ_TEXT, 0, tk.timeSignal, tk.p3);
+   ObjectSetInteger(0, lbl, OBJPROP_COLOR, TickColor);
+   ObjectSetInteger(0, lbl, OBJPROP_FONTSIZE, 8);
+   ObjectSetInteger(0, lbl, OBJPROP_ANCHOR, tk.isBull ? ANCHOR_LOWER : ANCHOR_UPPER);
+   ObjectSetString(0, lbl, OBJPROP_TEXT, "TICK");
+}
+
+//+------------------------------------------------------------------+
 void MaybeAlert(SwingAB &s, TFCategory cat, ENUM_TIMEFRAMES tf, int rates_total)
 {
    if(!EnableAlerts) return;
@@ -1090,6 +1126,7 @@ void ProcessIndicator()
 
    bool abOn = patternOn[PATTERN_AB_HUNT];
    bool ibOn = patternOn[PATTERN_INSIDE_BAR];
+   bool tkOn = patternOn[PATTERN_TICK_FRACTAL];
 
    // تشخیص، چرخه عمر و فیلترها همگی در GOD_OF_HUNTCore انجام می‌شوند تا اندیکاتور
    // و اسکنر دقیقا یک منطق داشته باشند. اینجا فقط رسم می‌ماند.
@@ -1117,6 +1154,19 @@ void ProcessIndicator()
       {
          nIB = AnalyzeInsideBars(_Symbol, tf, ibs);
          if(nIB < 0) return;
+      }
+   }
+
+   TickFractal tks[];
+   int nTK = 0;
+
+   if(tkOn)
+   {
+      if(abOn) nTK = CollectTickFractals(rates, rates_total, tks);
+      else
+      {
+         nTK = AnalyzeTickFractals(_Symbol, tf, tks);
+         if(nTK < 0) return;
       }
    }
 
@@ -1158,8 +1208,8 @@ void ProcessIndicator()
          MaybeAlert(kept[k], cat, tf, rates_total);
    }
 
-   // Inside Bar ها فقط از کندل های بسته شده ساخته می‌شوند، پس فقط با کندل
-   // جدید عوض می‌شوند و رسمشان در بازترسیم کامل کافی است.
+   // Inside Bar و Tick Fractal فقط از کندل های بسته شده ساخته می‌شوند، پس
+   // فقط با کندل جدید عوض می‌شوند و رسمشان در بازترسیم کامل کافی است.
    if(fullRedraw)
    {
       for(int k = 0; k < nIB; k++)
@@ -1170,6 +1220,15 @@ void ProcessIndicator()
          // بار، درست بعد از تشکیل، هشدار می‌دهد.
          if(EnableAlerts && ibs[k].ageCandles == 1)
             Alert("GOD_OF_HUNT ", _Symbol, " ", TFToStr(tf), ": Inside Bar");
+      }
+
+      for(int k = 0; k < nTK; k++)
+      {
+         DrawTickFractal(tks[k], cat, tf);
+
+         if(EnableAlerts && tks[k].ageCandles == 1)
+            Alert("GOD_OF_HUNT ", _Symbol, " ", TFToStr(tf),
+                  ": Tick Fractal ", tks[k].isBull ? "BULL" : "BEAR");
       }
    }
 

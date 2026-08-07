@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                                     GOD_OF_HUNT_Scanner.mq5   v1.01   |
+//|                                     GOD_OF_HUNT_Scanner.mq5   v1.02   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
@@ -17,7 +17,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "1.01"
+#property version   "1.02"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
@@ -701,7 +701,8 @@ string HeaderText()
 
 string StateTextOf(ScanRow &r)
 {
-   if(r.pattern == PATTERN_INSIDE_BAR) return "IB";
+   if(r.pattern == PATTERN_INSIDE_BAR)   return "IB";
+   if(r.pattern == PATTERN_TICK_FRACTAL) return "TICK";
    if(r.dead != AB_ALIVE)     return DeadReasonText(r.dead);
    if(r.state == AB_BROKEN)   return r.hasBreak ? "BREAK" : "HUNT";
    if(r.state == AB_RETRACED) return "C ok";
@@ -1247,6 +1248,69 @@ void RunScan()
                rows[nRows].tfIndex   = ti;
                rows[nRows].pattern   = PATTERN_INSIDE_BAR;
                rows[nRows].isBull    = false;   // IB جهت ندارد
+               rows[nRows].state     = AB_FORMING;
+               rows[nRows].hasBreak  = false;
+               rows[nRows].rank      = rank;
+               rows[nRows].groupRank = rank;
+               rows[nRows].key       = key;
+               rows[nRows].dead      = AB_ALIVE;
+               rows[nRows].goneAt    = 0;
+
+               rows[nRows].newMark = "";
+               if(NewMarkMinutes > 0 && seenFirst[seenIdx] > 0)
+               {
+                  int ageMin = (int)((TimeLocal() - seenFirst[seenIdx]) / 60);
+                  if(ageMin <= NewMarkMinutes)
+                     rows[nRows].newMark = IntegerToString(ageMin) + "m";
+               }
+
+               nRows++;
+            }
+         }
+
+         // --- الگوی TICK FRACTAL روی همین نماد و تایم فریم.
+         //
+         // مثل IB رتبه 4 دارد و چرخه عمر ندارد؛ ولی برخلاف IB جهت دارد
+         // (جهت سویینگ و شکست) و ستون DIR را عادی پر می‌کند.
+         if(patScan[PATTERN_TICK_FRACTAL])
+         {
+            TickFractal tks[];
+            int nTK = (n >= 0) ? CollectTickFractals(rates, rates_total, tks)
+                               : AnalyzeTickFractals(sym, tf, tks);
+
+            for(int k = 0; k < nTK; k++)
+            {
+               int rank = 4;
+
+               string key = sym + "|" + IntegerToString((int)tf) + "|TK|" +
+                            IntegerToString((long)tks[k].timeSignal);
+
+               int seenIdx = SeenIndex(key);
+               bool notify = false;
+
+               if(seenIdx < 0)
+               {
+                  bool alreadyKnown = false;
+                  seenIdx = RememberSeen(key, GVName(sym, tf, tks[k].timeSignal) + "K",
+                                         !firstScanDone, alreadyKnown, rank);
+                  notify = (!alreadyKnown);
+               }
+
+               if(notify && firstScanDone && EnablePush &&
+                  PassesFilter(rank, NotifyFilter))
+               {
+                  SendNotification("GOD_OF_HUNT " + sym + " " + TFToStr(tf) +
+                                   " TICK " + (tks[k].isBull ? "BULL" : "BEAR"));
+               }
+
+               if(nRows >= ArraySize(rows)) ArrayResize(rows, nRows + 256);
+
+               rows[nRows].symbol    = sym;
+               rows[nRows].symIndex  = si;
+               rows[nRows].tf        = tf;
+               rows[nRows].tfIndex   = ti;
+               rows[nRows].pattern   = PATTERN_TICK_FRACTAL;
+               rows[nRows].isBull    = tks[k].isBull;
                rows[nRows].state     = AB_FORMING;
                rows[nRows].hasBreak  = false;
                rows[nRows].rank      = rank;

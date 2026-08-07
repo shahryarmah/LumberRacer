@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                                        GOD_OF_HUNT_Core.mqh   v1.01   |
+//|                                        GOD_OF_HUNT_Core.mqh   v1.02   |
 //|                                                                  |
 //| منطق مشترک تشخیص سویینگ و چرخه عمر الگوی ABCD.                   |
 //| هم GOD_OF_HUNT.mq5 (اندیکاتور چارت) و هم GOD_OF_HUNT_Scanner.mq5           |
@@ -53,6 +53,16 @@ input int    BreakMaxCandles      = 3;     // ترکیب حداکثر چند ک�
 // الگوی دو کندلی: کندل دوم (فرزند) کاملا در دل کندل اول (مادر) است —
 // های و لوی فرزند حتی به های و لوی مادر «تاچ» هم نکرده (مقایسه اکید).
 input int    IBMaxAgeCandles      = 5;     // الگو تا چند کندل بعد از فرزند فعال بماند (اسکن و رسم)
+
+//---- الگوی TICK FRACTAL
+// سه کندلی، توسعه یافته Inside Bar: مادر + فرزند (همان شرایط IB با مقایسه
+// اکید)، و بعد کندل سیگنال که پشت های/لوی مادر در جهت سویینگ کلوز می‌کند.
+// مادر باید انتهای یک سویینگ شارپ باشد.
+input double TickMotherBodyPercent = 80.0; // حداقل درصد بادی کندل مادر
+input int    TickSwingMinCandles   = 3;    // حداقل کندل هم جهت سویینگ منتهی به مادر (خود مادر حساب است)
+input double TickSwingBodyPercent  = 60.0; // شارپ بودن: بدنه ها حداقل این درصد از گستره سویینگ را بپوشانند
+input int    TickSignalMaxCandles  = 5;    // سیگنال حداکثر تا این تعداد کندل بعد از فرزند، وگرنه بی اعتبار
+input int    TickMaxAgeCandles     = 5;    // الگو تا چند کندل بعد از سیگنال فعال بماند (اسکن و رسم)
 
 //+------------------------------------------------------------------+
 // لیست تایم فریم های هر دکمه. اینجا هستند تا اسکنر بتواند اندیس ذخیره شده
@@ -114,6 +124,11 @@ string CoreConfigSignature()
    h = h * 31 + (long)(BreakMinDistancePct * 10);
    h = h * 31 + BreakMaxCandles;
    h = h * 31 + IBMaxAgeCandles;
+   h = h * 31 + (long)(TickMotherBodyPercent * 10);
+   h = h * 31 + TickSwingMinCandles;
+   h = h * 31 + (long)(TickSwingBodyPercent * 10);
+   h = h * 31 + TickSignalMaxCandles;
+   h = h * 31 + TickMaxAgeCandles;
 
    if(h < 0) h = -h;
    return IntegerToString(h % 1000000);
@@ -133,23 +148,26 @@ int ClampIdx(int idx, int size)
 enum PatternId
 {
    PATTERN_AB_HUNT = 0,   // الگوی ABCD (شکار نقدینگی)
-   PATTERN_INSIDE_BAR = 1
+   PATTERN_INSIDE_BAR = 1,
+   PATTERN_TICK_FRACTAL = 2
 };
 
-#define PATTERN_COUNT 2
+#define PATTERN_COUNT 3
 
 string PatternName(int p)
 {
-   if(p == PATTERN_AB_HUNT)    return "AB HUNT";
-   if(p == PATTERN_INSIDE_BAR) return "INSIDE BAR";
+   if(p == PATTERN_AB_HUNT)      return "AB HUNT";
+   if(p == PATTERN_INSIDE_BAR)   return "INSIDE BAR";
+   if(p == PATTERN_TICK_FRACTAL) return "TICK FRACTAL";
    return "?";
 }
 
 // کد کوتاه برای جدول اسکنر؛ عرض جدول نباید زیاد شود
 string PatternShort(int p)
 {
-   if(p == PATTERN_AB_HUNT)    return "AB";
-   if(p == PATTERN_INSIDE_BAR) return "IB";
+   if(p == PATTERN_AB_HUNT)      return "AB";
+   if(p == PATTERN_INSIDE_BAR)   return "IB";
+   if(p == PATTERN_TICK_FRACTAL) return "TICK";
    return "?";
 }
 
@@ -1276,5 +1294,184 @@ int AnalyzeInsideBars(string symbol, ENUM_TIMEFRAMES tf, InsideBar &out[])
    if(rates_total < 3) return -1;
 
    return CollectInsideBars(rates, rates_total, out);
+}
+
+//+------------------------------------------------------------------+
+// ================= الگوی TICK FRACTAL =================
+//
+// سه کندلی، توسعه یافته Inside Bar:
+//
+//   ۱. مادر + فرزند دقیقا با شرایط IB (فرزند اکیدا داخل مادر).
+//   ۲. مادر حداقل TickMotherBodyPercent بادی دارد و انتهای یک سویینگ شارپ
+//      است: حداقل TickSwingMinCandles کندل هم جهت پشت سر هم که به خود مادر
+//      ختم می‌شوند (مادر هم حساب است).
+//   ۳. کندل سیگنال در جهت سویینگ پشت های/لوی مادر «کلوز» می‌کند و باید
+//      حداکثر TickSignalMaxCandles کندل بعد از فرزند بیاید، وگرنه بی اعتبار.
+//
+// رسم: در سویینگ نزولی از لوی مادر به لوی فرزند و از لوی فرزند به لوی
+// سیگنال خط کشیده می‌شود؛ در صعودی همین با های ها — که شکل تیک می‌سازد.
+
+struct TickFractal
+{
+   int      idxMother;
+   int      idxChild;
+   int      idxSignal;
+   datetime timeMother;
+   datetime timeChild;
+   datetime timeSignal;
+   bool     isBull;       // جهت سویینگ و شکست
+   double   motherHigh;
+   double   motherLow;
+   // سه نقطه خط تیک: های مادر/فرزند/سیگنال در صعودی، لوی آنها در نزولی
+   double   p1;
+   double   p2;
+   double   p3;
+   int      ageCandles;   // چند کندل از بسته شدن سیگنال گذشته (۱ = همین الان)
+};
+
+// آیا مادر انتهای یک سویینگ شارپ هم جهت خودش است؟
+bool TickSharpSwing(MqlRates &rates[], int idxMother, bool bull)
+{
+   // شمارش کندل های هم جهت پشت سر هم که به مادر ختم می‌شوند. کندل بی جهت
+   // (اوپن == کلوز) زنجیره را می‌شکند؛ سویینگ شارپ کندل خنثی ندارد.
+   // سقف پیمایش تا طول سویینگ بی جهت بلند نشود و هزینه ثابت بماند.
+   int start = idxMother;
+
+   while(start > 0 && (idxMother - start) < 30)
+   {
+      int prev = start - 1;
+      bool same = bull ? (rates[prev].close > rates[prev].open)
+                       : (rates[prev].close < rates[prev].open);
+      if(!same) break;
+      start = prev;
+   }
+
+   if(idxMother - start + 1 < TickSwingMinCandles) return false;
+
+   // شارپ ۱: حرکت پله ای بدون مکث — هر کندل فراتر از کندل قبل می‌رود
+   for(int m = start + 1; m <= idxMother; m++)
+   {
+      bool prog = bull ? (rates[m].high > rates[m-1].high)
+                       : (rates[m].low  < rates[m-1].low);
+      if(!prog) return false;
+   }
+
+   // شارپ ۲: گستره بدنه ها بخش عمده گستره سویینگ را بپوشاند
+   // (همان منطق مومنتم ۲ در ValidateAB)
+   double rHi = rates[start].high, rLo = rates[start].low;
+   double bHi = MathMax(rates[start].open, rates[start].close);
+   double bLo = MathMin(rates[start].open, rates[start].close);
+
+   for(int m = start; m <= idxMother; m++)
+   {
+      if(rates[m].high > rHi) rHi = rates[m].high;
+      if(rates[m].low  < rLo) rLo = rates[m].low;
+
+      double lo = MathMin(rates[m].open, rates[m].close);
+      double hi = MathMax(rates[m].open, rates[m].close);
+      if(lo < bLo) bLo = lo;
+      if(hi > bHi) bHi = hi;
+   }
+
+   if(rHi - rLo <= 0.0) return false;
+   if((bHi - bLo) < (rHi - rLo) * TickSwingBodyPercent / 100.0) return false;
+
+   return true;
+}
+
+// همه Tick Fractal های «فعال» — سیگنال در TickMaxAgeCandles کندل آخر.
+// خروجی به ترتیب زمانی. برگشتی تعداد است.
+int CollectTickFractals(MqlRates &rates[], int rates_total, TickFractal &out[])
+{
+   ArrayResize(out, 0);
+   int cnt = 0;
+
+   if(rates_total < TickSwingMinCandles + 2) return 0;
+
+   // سیگنال باید هم بسته شده باشد و هم داخل پنجره سن؛ از روی آن، قدیمی ترین
+   // فرزندی که هنوز می‌تواند الگوی فعال بسازد به دست می‌آید.
+   int lastSignal  = rates_total - 2;
+   int firstSignal = rates_total - 1 - TickMaxAgeCandles;
+   int firstChild  = firstSignal - TickSignalMaxCandles;
+   if(firstChild < TickSwingMinCandles) firstChild = TickSwingMinCandles;
+
+   ArrayResize(out, rates_total);
+
+   for(int m = firstChild; m <= lastSignal - 1; m++)
+   {
+      int mo = m - 1;
+
+      // --- شرط IB: فرزند اکیدا داخل مادر
+      if(!(rates[m].high < rates[mo].high && rates[m].low > rates[mo].low))
+         continue;
+
+      // --- جهت و بادی مادر
+      double range = rates[mo].high - rates[mo].low;
+      if(range <= 0.0) continue;
+
+      double body = MathAbs(rates[mo].close - rates[mo].open);
+      if(body / range * 100.0 < TickMotherBodyPercent) continue;
+
+      if(rates[mo].close == rates[mo].open) continue;
+      bool bull = (rates[mo].close > rates[mo].open);
+
+      // --- مادر انتهای سویینگ شارپ
+      if(!TickSharpSwing(rates, mo, bull)) continue;
+
+      // --- کندل سیگنال: اولین کلوز پشت های/لوی مادر در جهت سویینگ،
+      //     حداکثر TickSignalMaxCandles کندل بعد از فرزند و فقط کندل بسته شده
+      int sEnd = m + TickSignalMaxCandles;
+      if(sEnd > lastSignal) sEnd = lastSignal;
+
+      int idxSignal = -1;
+      for(int s = m + 1; s <= sEnd; s++)
+      {
+         bool closedBeyond = bull ? (rates[s].close > rates[mo].high)
+                                  : (rates[s].close < rates[mo].low);
+         if(closedBeyond) { idxSignal = s; break; }
+      }
+      if(idxSignal < 0) continue;
+
+      int age = rates_total - 1 - idxSignal;
+      if(age > TickMaxAgeCandles) continue;
+
+      out[cnt].idxMother  = mo;
+      out[cnt].idxChild   = m;
+      out[cnt].idxSignal  = idxSignal;
+      out[cnt].timeMother = rates[mo].time;
+      out[cnt].timeChild  = rates[m].time;
+      out[cnt].timeSignal = rates[idxSignal].time;
+      out[cnt].isBull     = bull;
+      out[cnt].motherHigh = rates[mo].high;
+      out[cnt].motherLow  = rates[mo].low;
+      out[cnt].p1         = bull ? rates[mo].high        : rates[mo].low;
+      out[cnt].p2         = bull ? rates[m].high         : rates[m].low;
+      out[cnt].p3         = bull ? rates[idxSignal].high : rates[idxSignal].low;
+      out[cnt].ageCandles = age;
+      cnt++;
+   }
+
+   ArrayResize(out, cnt);
+   return cnt;
+}
+
+// نسخه کامل با کپی داده، برای وقتی که rates از AnalyzeSymbol در دسترس نیست.
+int AnalyzeTickFractals(string symbol, ENUM_TIMEFRAMES tf, TickFractal &out[])
+{
+   int minBars = TickSwingMinCandles + 2;
+
+   int available = Bars(symbol, tf);
+   if(available < minBars) return -1;
+
+   // پیمایش سویینگ در TickSharpSwing تا ۳۰ کندل عقب می‌رود
+   int needed = 30 + 2 + TickSignalMaxCandles + TickMaxAgeCandles + 2;
+   if(needed > available) needed = available;
+
+   MqlRates rates[];
+   ArraySetAsSeries(rates, false);
+   int rates_total = CopyRates(symbol, tf, 0, needed, rates);
+   if(rates_total < minBars) return -1;
+
+   return CollectTickFractals(rates, rates_total, out);
 }
 //+------------------------------------------------------------------+
