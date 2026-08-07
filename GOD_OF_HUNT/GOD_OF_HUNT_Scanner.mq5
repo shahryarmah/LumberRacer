@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                                     GOD_OF_HUNT_Scanner.mq5   v1.04   |
+//|                                     GOD_OF_HUNT_Scanner.mq5   v1.05   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
@@ -17,7 +17,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "1.04"
+#property version   "1.05"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
@@ -778,8 +778,12 @@ string HeaderText()
 
 string StateTextOf(ScanRow &r)
 {
-   if(r.pattern == PATTERN_INSIDE_BAR)   return "IB";
-   if(r.pattern == PATTERN_TICK_FRACTAL) return "TICK";
+   // الگوی منقضی شده IB/TICK با AB_DEAD_EXPIRED علامت می‌خورد و مثل الگوی
+   // مرده AB علتش نوشته می‌شود ("X old")
+   if(r.pattern == PATTERN_INSIDE_BAR)
+      return (r.dead != AB_ALIVE) ? DeadReasonText(r.dead) : "IB";
+   if(r.pattern == PATTERN_TICK_FRACTAL)
+      return (r.dead != AB_ALIVE) ? DeadReasonText(r.dead) : "TICK";
    if(r.dead != AB_ALIVE)     return DeadReasonText(r.dead);
    if(r.state == AB_BROKEN)   return r.hasBreak ? "BREAK" : "HUNT";
    if(r.state == AB_RETRACED) return "C ok";
@@ -1292,7 +1296,8 @@ void RunScan()
 
             for(int k = 0; k < nIB; k++)
             {
-               int rank = 4;
+               // منقضی شده ته جدول می‌رود، مثل الگوی مرده AB
+               int rank = ibs[k].expired ? 5 : 4;
 
                string key = sym + "|" + IntegerToString((int)tf) + "|IB|" +
                             IntegerToString((long)ibs[k].timeChild);
@@ -1310,8 +1315,9 @@ void RunScan()
                   notify = (!alreadyKnown);
                }
 
-               // IB چرخه عمر و گذار وضعیت ندارد؛ فقط اولین رویت خبر می‌دهد
-               if(notify && firstScanDone && EnablePush &&
+               // IB چرخه عمر و گذار وضعیت ندارد؛ فقط اولین رویت خبر می‌دهد،
+               // و الگوی منقضی شده اصلا خبر نمی‌دهد
+               if(notify && !ibs[k].expired && firstScanDone && EnablePush &&
                   PassesFilter(rank, NotifyFilter))
                {
                   SendNotification("GOD_OF_HUNT " + sym + " " + TFToStr(tf) + " IB");
@@ -1330,7 +1336,7 @@ void RunScan()
                rows[nRows].rank      = rank;
                rows[nRows].groupRank = rank;
                rows[nRows].key       = key;
-               rows[nRows].dead      = AB_ALIVE;
+               rows[nRows].dead      = ibs[k].expired ? AB_DEAD_EXPIRED : AB_ALIVE;
                rows[nRows].goneAt    = 0;
 
                rows[nRows].newMark = "";
@@ -1357,7 +1363,7 @@ void RunScan()
 
             for(int k = 0; k < nTK; k++)
             {
-               int rank = 4;
+               int rank = tks[k].expired ? 5 : 4;
 
                string key = sym + "|" + IntegerToString((int)tf) + "|TK|" +
                             IntegerToString((long)tks[k].timeSignal);
@@ -1373,7 +1379,7 @@ void RunScan()
                   notify = (!alreadyKnown);
                }
 
-               if(notify && firstScanDone && EnablePush &&
+               if(notify && !tks[k].expired && firstScanDone && EnablePush &&
                   PassesFilter(rank, NotifyFilter))
                {
                   SendNotification("GOD_OF_HUNT " + sym + " " + TFToStr(tf) +
@@ -1393,7 +1399,7 @@ void RunScan()
                rows[nRows].rank      = rank;
                rows[nRows].groupRank = rank;
                rows[nRows].key       = key;
-               rows[nRows].dead      = AB_ALIVE;
+               rows[nRows].dead      = tks[k].expired ? AB_DEAD_EXPIRED : AB_ALIVE;
                rows[nRows].goneAt    = 0;
 
                rows[nRows].newMark = "";

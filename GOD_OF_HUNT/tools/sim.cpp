@@ -434,14 +434,16 @@ int main()
       if(nIB != 2 || ibs[0].idxChild != 1 || ibs[1].idxChild != 4)
          printf("    !! FAIL: wrong inside-bar set\n");
 
-      // پنجره سن: با IBMaxAgeCandles=2 فقط فرزند 4 (سن 1) باید بماند؛
-      // فرزند 1 سن 4 دارد و بیرون پنجره است.
+      // پنجره سن: با IBMaxAgeCandles=2 فرزند 4 (سن 1) فعال است و فرزند 1
+      // (سن 4) منقضی — ولی چون انقضایش داخل همان روز افتاده باید با
+      // expired=true برگردد تا خاکستری رسم شود، نه اینکه حذف شود.
       int savedAge = IBMaxAgeCandles;
       IBMaxAgeCandles = 2;
       nIB = CollectInsideBars(g_bars.data(), n, ibs);
-      printf("  IBMaxAgeCandles=2 -> %d  (expected 1: child=4)\n", nIB);
-      if(nIB != 1 || ibs[0].idxChild != 4)
-         printf("    !! FAIL: age window wrong\n");
+      printf("  IBMaxAgeCandles=2 -> %d  (expected 2: child=1 expired, child=4 alive)\n", nIB);
+      if(nIB != 2 || ibs[0].idxChild != 1 || !ibs[0].expired ||
+         ibs[1].idxChild != 4 || ibs[1].expired)
+         printf("    !! FAIL: age window / expired flag wrong\n");
       IBMaxAgeCandles = savedAge;
 
       // فرزند روی کندل جاری: کندل 5 داخل 4 نیست ولی حتی اگر بود نباید
@@ -500,13 +502,21 @@ int main()
       if(nTK != 0) printf("    !! FAIL: mother body rule ignored\n");
       TickMotherBodyPercent = savedBody;
 
-      // سویینگ کوتاه: با حداقل ۴ کندل هم جهت، سویینگ سه کندلی باید رد شود
-      int savedMin = TickSwingMinCandles;
-      TickSwingMinCandles = 4;
-      nTK = CollectTickFractals(g_bars.data(), n, tks);
-      printf("  TickSwingMinCandles=4 -> %d  (expected 0)\n", nTK);
-      if(nTK != 0) printf("    !! FAIL: swing length rule ignored\n");
-      TickSwingMinCandles = savedMin;
+      // مادر باید انتهای سویینگ باشد: کندل 0 لوی 0.9995 دارد که بالای لوی
+      // مادر (0.9848) است، پس با نگاه به عقب هم مادر همچنان اکسترمم است.
+      // برای رد شدن، پنجره باید آنقدر بلند شود که کندلی با لوی پایین تر
+      // ببیند — چنین کندلی در این سری نیست، پس در عوض خلاف جهت را می‌سنجیم:
+      // اگر مادر صعودی فرض شود اکسترمم بالا نیست.
+      {
+         // کندل 2 (نزولی، لوی 0.9898) قبل از مادر است و لوی مادر پایین تر
+         // است، پس شرط برقرار می‌ماند — تست مثبت.
+         if(!TickSwingEnd(g_bars.data(), 3, false))
+            printf("    !! FAIL: mother should qualify as swing end\n");
+         // همان مادر در جهت صعودی نباید اکسترمم باشد (کندل های قبلی
+         // های بالاتری دارند)
+         if(TickSwingEnd(g_bars.data(), 3, true))
+            printf("    !! FAIL: bullish swing-end must reject this mother\n");
+      }
 
       // پنجره سیگنال: با سقف ۲ کندل بعد از فرزند، سیگنال کندل ۷ دیر است
       int savedWin = TickSignalMaxCandles;
@@ -515,6 +525,16 @@ int main()
       printf("  TickSignalMaxCandles=2 -> %d  (expected 0)\n", nTK);
       if(nTK != 0) printf("    !! FAIL: signal window rule ignored\n");
       TickSignalMaxCandles = savedWin;
+
+      // پنجره سن: با TickMaxAgeCandles=0 الگو منقضی است ولی چون انقضا
+      // داخل همان روز افتاده باید با expired=true برگردد (خاکستری)
+      int savedTkAge = TickMaxAgeCandles;
+      TickMaxAgeCandles = 0;
+      nTK = CollectTickFractals(g_bars.data(), n, tks);
+      printf("  TickMaxAgeCandles=0 -> %d  (expected 1, expired)\n", nTK);
+      if(nTK != 1 || !tks[0].expired)
+         printf("    !! FAIL: expired tick must stay grey, not vanish\n");
+      TickMaxAgeCandles = savedTkAge;
    }
 
    return 0;

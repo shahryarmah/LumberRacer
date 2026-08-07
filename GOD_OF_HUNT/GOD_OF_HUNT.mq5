@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
-//|                                            GOD_OF_HUNT.mq5   v1.04   |
+//|                                            GOD_OF_HUNT.mq5   v1.05   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "1.04"
+#property version   "1.05"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
@@ -1038,6 +1038,10 @@ void DrawSwing(SwingAB &s, TFCategory cat, ENUM_TIMEFRAMES tf, color drawColor, 
 void DrawInsideBar(InsideBar &ib, TFCategory cat, ENUM_TIMEFRAMES tf, int tfSecs,
                    color drawColor)
 {
+   // الگوی منقضی شده مثل الگوی مرده AB خاکستری می‌ماند تا انتهای همان روز،
+   // تا بشود بررسی کرد که درست کنار گذاشته شده یا نه.
+   if(ib.expired) drawColor = DeadPatternColor;
+
    string base = GetTFPrefix(cat, tf) + "IB" + IntegerToString((long)ib.timeChild);
    datetime lineEnd = ib.timeChild + tfSecs * IBLineCandles;
 
@@ -1083,19 +1087,21 @@ void DrawTickFractal(TickFractal &tk, TFCategory cat, ENUM_TIMEFRAMES tf)
 {
    // دو پاره خط مادر→فرزند→سیگنال. در سویینگ نزولی از لوها و در صعودی از
    // های ها — همان شکلی که اسم الگو از آن می‌آید.
+   color drawColor = tk.expired ? DeadPatternColor : TickColor;
+
    string base = GetTFPrefix(cat, tf) + "TK" + IntegerToString((long)tk.timeSignal);
 
    string seg1 = base + "_S1";
    if(ObjectFind(0, seg1) >= 0) ObjectDelete(0, seg1);
    ObjectCreate(0, seg1, OBJ_TREND, 0, tk.timeMother, tk.p1, tk.timeChild, tk.p2);
-   ObjectSetInteger(0, seg1, OBJPROP_COLOR, TickColor);
+   ObjectSetInteger(0, seg1, OBJPROP_COLOR, drawColor);
    ObjectSetInteger(0, seg1, OBJPROP_WIDTH, TickLineWidth);
    ObjectSetInteger(0, seg1, OBJPROP_RAY_RIGHT, false);
 
    string seg2 = base + "_S2";
    if(ObjectFind(0, seg2) >= 0) ObjectDelete(0, seg2);
    ObjectCreate(0, seg2, OBJ_TREND, 0, tk.timeChild, tk.p2, tk.timeSignal, tk.p3);
-   ObjectSetInteger(0, seg2, OBJPROP_COLOR, TickColor);
+   ObjectSetInteger(0, seg2, OBJPROP_COLOR, drawColor);
    ObjectSetInteger(0, seg2, OBJPROP_WIDTH, TickLineWidth);
    ObjectSetInteger(0, seg2, OBJPROP_RAY_RIGHT, false);
 
@@ -1103,7 +1109,7 @@ void DrawTickFractal(TickFractal &tk, TFCategory cat, ENUM_TIMEFRAMES tf)
    string lbl = base + "_LBL";
    if(ObjectFind(0, lbl) >= 0) ObjectDelete(0, lbl);
    ObjectCreate(0, lbl, OBJ_TEXT, 0, tk.timeSignal, tk.p3);
-   ObjectSetInteger(0, lbl, OBJPROP_COLOR, TickColor);
+   ObjectSetInteger(0, lbl, OBJPROP_COLOR, drawColor);
    ObjectSetInteger(0, lbl, OBJPROP_FONTSIZE, 8);
    ObjectSetInteger(0, lbl, OBJPROP_ANCHOR, tk.isBull ? ANCHOR_LOWER : ANCHOR_UPPER);
    ObjectSetString(0, lbl, OBJPROP_TEXT, "TICK");

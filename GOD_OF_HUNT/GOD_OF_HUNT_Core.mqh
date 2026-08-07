@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                                        GOD_OF_HUNT_Core.mqh   v1.04   |
+//|                                        GOD_OF_HUNT_Core.mqh   v1.05   |
 //|                                                                  |
 //| منطق مشترک تشخیص سویینگ و چرخه عمر الگوی ABCD.                   |
 //| هم GOD_OF_HUNT.mq5 (اندیکاتور چارت) و هم GOD_OF_HUNT_Scanner.mq5           |
@@ -57,10 +57,9 @@ input int    IBMaxAgeCandles      = 5;     // الگو تا چند کندل بع
 //---- الگوی TICK FRACTAL
 // سه کندلی، توسعه یافته Inside Bar: مادر + فرزند (همان شرایط IB با مقایسه
 // اکید)، و بعد کندل سیگنال که پشت های/لوی مادر در جهت سویینگ کلوز می‌کند.
-// مادر باید انتهای یک سویینگ شارپ باشد.
+// مادر باید انتهای سویینگ باشد: افراطی ترین نقطه چند کندل اخیر در جهت خودش.
 input double TickMotherBodyPercent = 50.0; // حداقل درصد بادی کندل مادر
-input int    TickSwingMinCandles   = 3;    // حداقل کندل هم جهت سویینگ منتهی به مادر (خود مادر حساب است)
-input double TickSwingBodyPercent  = 60.0; // شارپ بودن: بدنه ها حداقل این درصد از گستره سویینگ را بپوشانند
+input int    TickSwingLookback     = 5;    // مادر باید اکسترمم این تعداد کندل قبل از خودش باشد
 input int    TickSignalMaxCandles  = 5;    // سیگنال حداکثر تا این تعداد کندل بعد از فرزند، وگرنه بی اعتبار
 input int    TickMaxAgeCandles     = 5;    // الگو تا چند کندل بعد از سیگنال فعال بماند (اسکن و رسم)
 
@@ -125,8 +124,7 @@ string CoreConfigSignature()
    h = h * 31 + BreakMaxCandles;
    h = h * 31 + IBMaxAgeCandles;
    h = h * 31 + (long)(TickMotherBodyPercent * 10);
-   h = h * 31 + TickSwingMinCandles;
-   h = h * 31 + (long)(TickSwingBodyPercent * 10);
+   h = h * 31 + TickSwingLookback;
    h = h * 31 + TickSignalMaxCandles;
    h = h * 31 + TickMaxAgeCandles;
 
@@ -1236,9 +1234,25 @@ struct InsideBar
    double   childHigh;
    double   childLow;
    int      ageCandles;   // چند کندل از بسته شدن فرزند گذشته (۱ = همین الان)
+   bool     expired;      // از پنجره سن گذشته؛ فقط خاکستری نمایش داده می‌شود
+   datetime deadTime;     // زمان کندلی که در آن منقضی شد (فقط وقتی expired)
 };
 
-// همه Inside Bar های «فعال» — فرزند در IBMaxAgeCandles کندل آخر.
+// اندیس اولین کندل روز جاری. الگوی منقضی شده مثل الگوی مرده AB بی سروصدا
+// حذف نمی‌شود؛ تا انتهای همان روزی که منقضی شده خاکستری می‌ماند.
+int FirstCandleOfToday(MqlRates &rates[], int rates_total)
+{
+   int  last   = rates_total - 1;
+   long dayNow = (long)rates[last].time / 86400;
+
+   int first = last;
+   while(first > 0 && (long)rates[first - 1].time / 86400 == dayNow)
+      first--;
+   return first;
+}
+
+// همه Inside Bar های «فعال» (فرزند در IBMaxAgeCandles کندل آخر) به علاوه
+// منقضی شده های همان روز با expired=true برای نمایش خاکستری.
 // خروجی به ترتیب زمانی (قدیمی -> جدید). برگشتی تعداد است.
 int CollectInsideBars(MqlRates &rates[], int rates_total, InsideBar &out[])
 {
@@ -1247,10 +1261,15 @@ int CollectInsideBars(MqlRates &rates[], int rates_total, InsideBar &out[])
 
    if(rates_total < 3) return 0;
 
-   // فقط دم آرایه بررسی می‌شود؛ الگوی کهنه تر از IBMaxAgeCandles نه در جدول
-   // می‌آید نه رسم می‌شود، پس گشتن کل تاریخچه فقط هزینه است.
+   int  last   = rates_total - 1;
+   long dayNow = (long)rates[last].time / 86400;
+
+   // پیمایش باید علاوه بر پنجره سن، منقضی شده هایی را هم بگیرد که لحظه
+   // انقضایشان (فرزند + IBMaxAgeCandles + 1) داخل روز جاری افتاده است.
    int lastChild  = rates_total - 2;                     // آخرین کندل بسته شده
-   int firstChild = rates_total - 1 - IBMaxAgeCandles;   // سن = rates_total-1-idxChild
+   int firstChild = last - IBMaxAgeCandles;              // سن = last - idxChild
+   int firstChildToday = FirstCandleOfToday(rates, rates_total) - IBMaxAgeCandles - 1;
+   if(firstChildToday < firstChild) firstChild = firstChildToday;
    if(firstChild < 1) firstChild = 1;
 
    ArrayResize(out, lastChild - firstChild + 1);
@@ -1262,6 +1281,20 @@ int CollectInsideBars(MqlRates &rates[], int rates_total, InsideBar &out[])
       bool inside = (rates[m].high < rates[mo].high && rates[m].low > rates[mo].low);
       if(!inside) continue;
 
+      int  age     = last - m;
+      bool expired = (age > IBMaxAgeCandles);
+      datetime deadTime = 0;
+
+      if(expired)
+      {
+         int idxExp = m + IBMaxAgeCandles + 1;
+         if(idxExp > last) idxExp = last;
+         deadTime = rates[idxExp].time;
+
+         // منقضی شده روزهای قبل دیگر نمایش داده نمی‌شود
+         if((long)deadTime / 86400 != dayNow) continue;
+      }
+
       out[cnt].idxMother  = mo;
       out[cnt].idxChild   = m;
       out[cnt].timeMother = rates[mo].time;
@@ -1270,7 +1303,9 @@ int CollectInsideBars(MqlRates &rates[], int rates_total, InsideBar &out[])
       out[cnt].motherLow  = rates[mo].low;
       out[cnt].childHigh  = rates[m].high;
       out[cnt].childLow   = rates[m].low;
-      out[cnt].ageCandles = rates_total - 1 - m;
+      out[cnt].ageCandles = age;
+      out[cnt].expired    = expired;
+      out[cnt].deadTime   = deadTime;
       cnt++;
    }
 
@@ -1285,7 +1320,10 @@ int AnalyzeInsideBars(string symbol, ENUM_TIMEFRAMES tf, InsideBar &out[])
    int available = Bars(symbol, tf);
    if(available < 3) return -1;
 
-   int needed = IBMaxAgeCandles + 2;
+   // به اندازه AB تاریخچه گرفته می‌شود تا خاکستری های امروز هم پیدا شوند؛
+   // روی تایم های خیلی پایین همان محدودیت AB برقرار است (روزِ کامل شاید در
+   // این تعداد کندل جا نشود).
+   int needed = ABCDHistoryBars;
    if(needed > available) needed = available;
 
    MqlRates rates[];
@@ -1302,9 +1340,8 @@ int AnalyzeInsideBars(string symbol, ENUM_TIMEFRAMES tf, InsideBar &out[])
 // سه کندلی، توسعه یافته Inside Bar:
 //
 //   ۱. مادر + فرزند دقیقا با شرایط IB (فرزند اکیدا داخل مادر).
-//   ۲. مادر حداقل TickMotherBodyPercent بادی دارد و انتهای یک سویینگ شارپ
-//      است: حداقل TickSwingMinCandles کندل هم جهت پشت سر هم که به خود مادر
-//      ختم می‌شوند (مادر هم حساب است).
+//   ۲. مادر حداقل TickMotherBodyPercent بادی دارد و انتهای سویینگ است:
+//      در جهت خودش افراطی ترین نقطه TickSwingLookback کندل قبلش.
 //   ۳. کندل سیگنال در جهت سویینگ پشت های/لوی مادر «کلوز» می‌کند و باید
 //      حداکثر TickSignalMaxCandles کندل بعد از فرزند بیاید، وگرنه بی اعتبار.
 //
@@ -1327,73 +1364,51 @@ struct TickFractal
    double   p2;
    double   p3;
    int      ageCandles;   // چند کندل از بسته شدن سیگنال گذشته (۱ = همین الان)
+   bool     expired;      // از پنجره سن گذشته؛ فقط خاکستری نمایش داده می‌شود
+   datetime deadTime;     // زمان کندلی که در آن منقضی شد (فقط وقتی expired)
 };
 
-// آیا مادر انتهای یک سویینگ شارپ هم جهت خودش است؟
-bool TickSharpSwing(MqlRates &rates[], int idxMother, bool bull)
+// آیا مادر انتهای سویینگ است؟ تعریف ساده (به درخواست صاحب پروژه، به جای
+// قید «۳ کندل هم جهت + شارپ» نسخه های قبل): مادر باید در جهت خودش
+// افراطی ترین نقطه TickSwingLookback کندل قبلش باشد — سقف بالاتر از همه در
+// صعودی، کف پایین تر از همه در نزولی. تساوی رد نمی‌کند.
+bool TickSwingEnd(MqlRates &rates[], int idxMother, bool bull)
 {
-   // شمارش کندل های هم جهت پشت سر هم که به مادر ختم می‌شوند. کندل بی جهت
-   // (اوپن == کلوز) زنجیره را می‌شکند؛ سویینگ شارپ کندل خنثی ندارد.
-   // سقف پیمایش تا طول سویینگ بی جهت بلند نشود و هزینه ثابت بماند.
-   int start = idxMother;
+   int from = idxMother - TickSwingLookback;
+   if(from < 0) from = 0;
+   if(from >= idxMother) return false;   // هیچ کندلی قبل از مادر نیست
 
-   while(start > 0 && (idxMother - start) < 30)
+   for(int k = from; k < idxMother; k++)
    {
-      int prev = start - 1;
-      bool same = bull ? (rates[prev].close > rates[prev].open)
-                       : (rates[prev].close < rates[prev].open);
-      if(!same) break;
-      start = prev;
+      if(bull)  { if(rates[k].high > rates[idxMother].high) return false; }
+      else      { if(rates[k].low  < rates[idxMother].low)  return false; }
    }
-
-   if(idxMother - start + 1 < TickSwingMinCandles) return false;
-
-   // شارپ ۱: حرکت پله ای بدون مکث — هر کندل فراتر از کندل قبل می‌رود
-   for(int m = start + 1; m <= idxMother; m++)
-   {
-      bool prog = bull ? (rates[m].high > rates[m-1].high)
-                       : (rates[m].low  < rates[m-1].low);
-      if(!prog) return false;
-   }
-
-   // شارپ ۲: گستره بدنه ها بخش عمده گستره سویینگ را بپوشاند
-   // (همان منطق مومنتم ۲ در ValidateAB)
-   double rHi = rates[start].high, rLo = rates[start].low;
-   double bHi = MathMax(rates[start].open, rates[start].close);
-   double bLo = MathMin(rates[start].open, rates[start].close);
-
-   for(int m = start; m <= idxMother; m++)
-   {
-      if(rates[m].high > rHi) rHi = rates[m].high;
-      if(rates[m].low  < rLo) rLo = rates[m].low;
-
-      double lo = MathMin(rates[m].open, rates[m].close);
-      double hi = MathMax(rates[m].open, rates[m].close);
-      if(lo < bLo) bLo = lo;
-      if(hi > bHi) bHi = hi;
-   }
-
-   if(rHi - rLo <= 0.0) return false;
-   if((bHi - bLo) < (rHi - rLo) * TickSwingBodyPercent / 100.0) return false;
 
    return true;
 }
 
-// همه Tick Fractal های «فعال» — سیگنال در TickMaxAgeCandles کندل آخر.
+// همه Tick Fractal های «فعال» (سیگنال در TickMaxAgeCandles کندل آخر) به
+// علاوه منقضی شده های همان روز با expired=true برای نمایش خاکستری.
 // خروجی به ترتیب زمانی. برگشتی تعداد است.
 int CollectTickFractals(MqlRates &rates[], int rates_total, TickFractal &out[])
 {
    ArrayResize(out, 0);
    int cnt = 0;
 
-   if(rates_total < TickSwingMinCandles + 2) return 0;
+   if(rates_total < 4) return 0;
 
-   // سیگنال باید هم بسته شده باشد و هم داخل پنجره سن؛ از روی آن، قدیمی ترین
-   // فرزندی که هنوز می‌تواند الگوی فعال بسازد به دست می‌آید.
+   int  last   = rates_total - 1;
+   long dayNow = (long)rates[last].time / 86400;
+
+   // سیگنال باید هم بسته شده باشد و هم یا داخل پنجره سن باشد یا انقضایش
+   // (سیگنال + TickMaxAgeCandles + 1) داخل روز جاری افتاده باشد.
    int lastSignal  = rates_total - 2;
-   int firstSignal = rates_total - 1 - TickMaxAgeCandles;
-   int firstChild  = firstSignal - TickSignalMaxCandles;
-   if(firstChild < TickSwingMinCandles) firstChild = TickSwingMinCandles;
+   int firstSignal = last - TickMaxAgeCandles;
+   int firstSignalToday = FirstCandleOfToday(rates, rates_total) - TickMaxAgeCandles - 1;
+   if(firstSignalToday < firstSignal) firstSignal = firstSignalToday;
+
+   int firstChild = firstSignal - TickSignalMaxCandles;
+   if(firstChild < 1) firstChild = 1;
 
    ArrayResize(out, rates_total);
 
@@ -1415,8 +1430,8 @@ int CollectTickFractals(MqlRates &rates[], int rates_total, TickFractal &out[])
       if(rates[mo].close == rates[mo].open) continue;
       bool bull = (rates[mo].close > rates[mo].open);
 
-      // --- مادر انتهای سویینگ شارپ
-      if(!TickSharpSwing(rates, mo, bull)) continue;
+      // --- مادر انتهای سویینگ
+      if(!TickSwingEnd(rates, mo, bull)) continue;
 
       // --- کندل سیگنال: اولین کلوز پشت های/لوی مادر در جهت سویینگ،
       //     حداکثر TickSignalMaxCandles کندل بعد از فرزند و فقط کندل بسته شده
@@ -1432,8 +1447,19 @@ int CollectTickFractals(MqlRates &rates[], int rates_total, TickFractal &out[])
       }
       if(idxSignal < 0) continue;
 
-      int age = rates_total - 1 - idxSignal;
-      if(age > TickMaxAgeCandles) continue;
+      int  age     = last - idxSignal;
+      bool expired = (age > TickMaxAgeCandles);
+      datetime deadTime = 0;
+
+      if(expired)
+      {
+         int idxExp = idxSignal + TickMaxAgeCandles + 1;
+         if(idxExp > last) idxExp = last;
+         deadTime = rates[idxExp].time;
+
+         // منقضی شده روزهای قبل دیگر نمایش داده نمی‌شود
+         if((long)deadTime / 86400 != dayNow) continue;
+      }
 
       out[cnt].idxMother  = mo;
       out[cnt].idxChild   = m;
@@ -1448,6 +1474,8 @@ int CollectTickFractals(MqlRates &rates[], int rates_total, TickFractal &out[])
       out[cnt].p2         = bull ? rates[m].high         : rates[m].low;
       out[cnt].p3         = bull ? rates[idxSignal].high : rates[idxSignal].low;
       out[cnt].ageCandles = age;
+      out[cnt].expired    = expired;
+      out[cnt].deadTime   = deadTime;
       cnt++;
    }
 
@@ -1458,13 +1486,14 @@ int CollectTickFractals(MqlRates &rates[], int rates_total, TickFractal &out[])
 // نسخه کامل با کپی داده، برای وقتی که rates از AnalyzeSymbol در دسترس نیست.
 int AnalyzeTickFractals(string symbol, ENUM_TIMEFRAMES tf, TickFractal &out[])
 {
-   int minBars = TickSwingMinCandles + 2;
+   int minBars = TickSwingLookback + 4;
 
    int available = Bars(symbol, tf);
    if(available < minBars) return -1;
 
-   // پیمایش سویینگ در TickSharpSwing تا ۳۰ کندل عقب می‌رود
-   int needed = 30 + 2 + TickSignalMaxCandles + TickMaxAgeCandles + 2;
+   // مثل IB به اندازه AB تاریخچه گرفته می‌شود تا خاکستری های امروز هم پیدا
+   // شوند؛ روی تایم های خیلی پایین ممکن است روز کامل در این تعداد جا نشود.
+   int needed = ABCDHistoryBars;
    if(needed > available) needed = available;
 
    MqlRates rates[];
