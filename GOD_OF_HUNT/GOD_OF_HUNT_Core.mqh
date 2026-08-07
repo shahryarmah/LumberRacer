@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                                        GOD_OF_HUNT_Core.mqh   v1.00   |
+//|                                        GOD_OF_HUNT_Core.mqh   v1.01   |
 //|                                                                  |
 //| منطق مشترک تشخیص سویینگ و چرخه عمر الگوی ABCD.                   |
 //| هم GOD_OF_HUNT.mq5 (اندیکاتور چارت) و هم GOD_OF_HUNT_Scanner.mq5           |
@@ -48,6 +48,11 @@ input double BreakMaxWickPercent  = 5.0;   // حداکثر درصد سایه ه�
 input double BreakMinSizeRatio    = 1.0;   // حداقل اندازه کندل شکست نسبت به میانگین رنج
 input double BreakMinDistancePct  = 10.0;  // حداقل فاصله اوپن و کلوز از سطح B (درصد از AB)
 input int    BreakMaxCandles      = 3;     // ترکیب حداکثر چند کندل به عنوان یک کندل شکست
+
+//---- الگوی INSIDE BAR
+// الگوی دو کندلی: کندل دوم (فرزند) کاملا در دل کندل اول (مادر) است —
+// های و لوی فرزند حتی به های و لوی مادر «تاچ» هم نکرده (مقایسه اکید).
+input int    IBMaxAgeCandles      = 5;     // الگو تا چند کندل بعد از فرزند فعال بماند (اسکن و رسم)
 
 //+------------------------------------------------------------------+
 // لیست تایم فریم های هر دکمه. اینجا هستند تا اسکنر بتواند اندیس ذخیره شده
@@ -108,6 +113,7 @@ string CoreConfigSignature()
    h = h * 31 + (long)(BreakMinSizeRatio * 10);
    h = h * 31 + (long)(BreakMinDistancePct * 10);
    h = h * 31 + BreakMaxCandles;
+   h = h * 31 + IBMaxAgeCandles;
 
    if(h < 0) h = -h;
    return IntegerToString(h % 1000000);
@@ -118,6 +124,33 @@ int ClampIdx(int idx, int size)
    if(idx < 0) return 0;
    if(idx >= size) return size - 1;
    return idx;
+}
+
+//+------------------------------------------------------------------+
+// الگوهای قابل انتخاب. هر الگو در هر دو اندیکاتور یک دکمه تیک دارد:
+// در اسکنر یعنی «اسکن بشود یا نه» و در اندیکاتور چارت یعنی «رسم بشود یا نه».
+// الگوی سوم بعدا به همین لیست اضافه می‌شود.
+enum PatternId
+{
+   PATTERN_AB_HUNT = 0,   // الگوی ABCD (شکار نقدینگی)
+   PATTERN_INSIDE_BAR = 1
+};
+
+#define PATTERN_COUNT 2
+
+string PatternName(int p)
+{
+   if(p == PATTERN_AB_HUNT)    return "AB HUNT";
+   if(p == PATTERN_INSIDE_BAR) return "INSIDE BAR";
+   return "?";
+}
+
+// کد کوتاه برای جدول اسکنر؛ عرض جدول نباید زیاد شود
+string PatternShort(int p)
+{
+   if(p == PATTERN_AB_HUNT)    return "AB";
+   if(p == PATTERN_INSIDE_BAR) return "IB";
+   return "?";
 }
 
 //+------------------------------------------------------------------+
@@ -1162,5 +1195,86 @@ int AnalyzeSymbol(string symbol, ENUM_TIMEFRAMES tf, int historyBars, int maxLoo
 
    return BuildActiveSwings(rates, rates_total, avgRange, raw, nRaw, out,
                             keepOnlyLast, showPrevious, tf);
+}
+
+//+------------------------------------------------------------------+
+// ================= الگوی INSIDE BAR =================
+//
+// الگوی دو کندلی: کندل مادر و بعد کندل فرزند که کاملا در دل مادر است.
+// «تاچ نکردن» یعنی مقایسه اکید: تساوی های یا لو هم الگو را رد می‌کند.
+//
+// فرزند فقط کندل «بسته شده» می‌تواند باشد: های و لوی کندل در حال تشکیل هنوز
+// می‌تواند باز شود و الگویی که وسط کندل تایید شود ممکن است تا بسته شدن باطل
+// شود (repaint). پس آخرین فرزند ممکن rates_total-2 است.
+
+struct InsideBar
+{
+   int      idxMother;
+   int      idxChild;
+   datetime timeMother;
+   datetime timeChild;
+   double   motherHigh;   // های و لوی کل الگو همین است، چون فرزند داخل مادر است
+   double   motherLow;
+   double   childHigh;
+   double   childLow;
+   int      ageCandles;   // چند کندل از بسته شدن فرزند گذشته (۱ = همین الان)
+};
+
+// همه Inside Bar های «فعال» — فرزند در IBMaxAgeCandles کندل آخر.
+// خروجی به ترتیب زمانی (قدیمی -> جدید). برگشتی تعداد است.
+int CollectInsideBars(MqlRates &rates[], int rates_total, InsideBar &out[])
+{
+   ArrayResize(out, 0);
+   int cnt = 0;
+
+   if(rates_total < 3) return 0;
+
+   // فقط دم آرایه بررسی می‌شود؛ الگوی کهنه تر از IBMaxAgeCandles نه در جدول
+   // می‌آید نه رسم می‌شود، پس گشتن کل تاریخچه فقط هزینه است.
+   int lastChild  = rates_total - 2;                     // آخرین کندل بسته شده
+   int firstChild = rates_total - 1 - IBMaxAgeCandles;   // سن = rates_total-1-idxChild
+   if(firstChild < 1) firstChild = 1;
+
+   ArrayResize(out, lastChild - firstChild + 1);
+
+   for(int m = firstChild; m <= lastChild; m++)
+   {
+      int mo = m - 1;
+
+      bool inside = (rates[m].high < rates[mo].high && rates[m].low > rates[mo].low);
+      if(!inside) continue;
+
+      out[cnt].idxMother  = mo;
+      out[cnt].idxChild   = m;
+      out[cnt].timeMother = rates[mo].time;
+      out[cnt].timeChild  = rates[m].time;
+      out[cnt].motherHigh = rates[mo].high;
+      out[cnt].motherLow  = rates[mo].low;
+      out[cnt].childHigh  = rates[m].high;
+      out[cnt].childLow   = rates[m].low;
+      out[cnt].ageCandles = rates_total - 1 - m;
+      cnt++;
+   }
+
+   ArrayResize(out, cnt);
+   return cnt;
+}
+
+// نسخه کامل با کپی داده، برای وقتی که rates از AnalyzeSymbol در دسترس نیست
+// (مثلا در اسکنر وقتی الگوی AB HUNT خاموش است).
+int AnalyzeInsideBars(string symbol, ENUM_TIMEFRAMES tf, InsideBar &out[])
+{
+   int available = Bars(symbol, tf);
+   if(available < 3) return -1;
+
+   int needed = IBMaxAgeCandles + 2;
+   if(needed > available) needed = available;
+
+   MqlRates rates[];
+   ArraySetAsSeries(rates, false);
+   int rates_total = CopyRates(symbol, tf, 0, needed, rates);
+   if(rates_total < 3) return -1;
+
+   return CollectInsideBars(rates, rates_total, out);
 }
 //+------------------------------------------------------------------+

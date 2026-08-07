@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
-//|                                            GOD_OF_HUNT.mq5   v1.00   |
+//|                                            GOD_OF_HUNT.mq5   v1.01   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "1.00"
+#property version   "1.01"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
@@ -52,6 +52,12 @@ input bool   ExtendBLineToNow     = true;  // ادامه خط B تا کندل ج
 input bool   ShowEntrySignal      = true;  // نمایش فلش سیگنال ورود
 input bool   EnableAlerts         = false; // هشدار در لحظات کلیدی
 
+//---- الگوی INSIDE BAR (رسم)
+// تشخیص در GOD_OF_HUNT_Core است (IBMaxAgeCandles)؛ اینها فقط رسم اند.
+input color  IBColor              = clrGold; // رنگ خطوط Inside Bar
+input int    IBLineCandles        = 5;       // طول خط ها بعد از کندل فرزند (بر حسب کندل)
+input bool   IBShowChildLines     = true;    // خطوط های و لوی کندل فرزند هم رسم شود
+
 //---- تایمر کندل
 input bool   ShowCandleTimer      = true;      // نمایش زمان باقی مانده تا بسته شدن کندل
 input color  CandleTimerColor     = clrGray;   // رنگ تایمر
@@ -93,6 +99,11 @@ enum TFCategory { STRUCTURE, TRIGGER, ENTRY, NONE };
 int idxStructure = 3;   // H4
 int idxTrigger   = 2;   // M20
 int idxEntry     = 8;   // M1
+
+// تیک هر الگو: روشن یعنی رسم بشود. با دکمه عوض می‌شود و مثل اندیس دکمه های
+// تایم فریم در آبجکت مخفی وضعیت ذخیره می‌شود، چون OnInit با هر تغییر تایم
+// فریم دوباره اجرا می‌شود و متغیر سراسری صفر می‌شود.
+bool patternOn[PATTERN_COUNT];
 
 //--- آبجکت ذخیره سازی محلی مخصوص این چارت
 string stateObjName;
@@ -288,6 +299,14 @@ void SaveState()
                 IntegerToString(idxTrigger)   + "|" +
                 IntegerToString(idxEntry);
 
+   // تیک الگوها بعد از سه اندیس تایم فریم. آبجکت قدیمی که این فیلدها را
+   // ندارد هم باید خوانده شود، پس موقع خواندن پیش فرض «همه روشن» است.
+   for(int p = 0; p < PATTERN_COUNT; p++)
+   {
+      txt += "|";
+      txt += patternOn[p] ? "1" : "0";
+   }
+
    if(ObjectFind(0, stateObjName) < 0)
    {
       if(ObjectCreate(0, stateObjName, OBJ_LABEL, 0, 0, 0))
@@ -332,6 +351,43 @@ void CreateTFButton(string name, int x, int y, string text)
    ObjectSetString(0, name, OBJPROP_TEXT, text);
 }
 
+//+------------------------------------------------------------------+
+// دکمه تیک هر الگو، زیر سه دکمه تایم فریم. سبز یعنی روشن (رسم می‌شود)،
+// خاکستری یعنی خاموش. متن هم تیک دارد تا به رنگ تنها تکیه نشود.
+string PatternButtonName(int p)
+{
+   return "GOH_BtnPat" + IntegerToString(p) + "_" + IntegerToString(ChartID());
+}
+
+void DrawPatternButton(int p)
+{
+   string name = PatternButtonName(p);
+
+   if(ObjectFind(0, name) < 0)
+   {
+      ObjectCreate(0, name, OBJ_BUTTON, 0, 0, 0);
+      ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+      ObjectSetInteger(0, name, OBJPROP_XDISTANCE, 10);
+      ObjectSetInteger(0, name, OBJPROP_YDISTANCE, 100 + 30 * p);
+      ObjectSetInteger(0, name, OBJPROP_XSIZE, 120);
+      ObjectSetInteger(0, name, OBJPROP_YSIZE, 20);
+      ObjectSetInteger(0, name, OBJPROP_FONTSIZE, 9);
+      ObjectSetInteger(0, name, OBJPROP_BORDER_TYPE, BORDER_FLAT);
+   }
+
+   ObjectSetInteger(0, name, OBJPROP_STATE, false);
+   ObjectSetInteger(0, name, OBJPROP_BGCOLOR, patternOn[p] ? clrSeaGreen : clrDimGray);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, patternOn[p] ? clrWhite : clrSilver);
+   ObjectSetString(0, name, OBJPROP_TEXT,
+                   (patternOn[p] ? "[x] " : "[  ] ") + PatternName(p));
+}
+
+void DrawPatternButtons()
+{
+   for(int p = 0; p < PATTERN_COUNT; p++)
+      DrawPatternButton(p);
+}
+
 static ulong lastClickTime       = 0;   // ضد لرزش کلیک روی آبجکت های ما
 static ulong lastObjectClickTime = 0;   // زمان آخرین کلیک پردازش شده روی آبجکت های ما
 
@@ -366,7 +422,7 @@ void UpdateCandleTimer()
       ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
       ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
       ObjectSetInteger(0, name, OBJPROP_XDISTANCE, 10);
-      ObjectSetInteger(0, name, OBJPROP_YDISTANCE, 100);
+      ObjectSetInteger(0, name, OBJPROP_YDISTANCE, 160);
       ObjectSetInteger(0, name, OBJPROP_FONTSIZE, 11);
       ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
    }
@@ -395,8 +451,8 @@ void UpdateFractalTFLabel()
       ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
       ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
       ObjectSetInteger(0, name, OBJPROP_XDISTANCE, 10);
-      // تایمر روی 100 با فونت 11 است، پس یک خط پایین تر
-      ObjectSetInteger(0, name, OBJPROP_YDISTANCE, 118);
+      // تایمر روی 160 با فونت 11 است، پس یک خط پایین تر
+      ObjectSetInteger(0, name, OBJPROP_YDISTANCE, 178);
       ObjectSetInteger(0, name, OBJPROP_FONTSIZE, 10);
       ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
    }
@@ -495,8 +551,8 @@ void UpdateSessionLabel()
       ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
       ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
       ObjectSetInteger(0, name, OBJPROP_XDISTANCE, 10);
-      // تایمر 100، فراکتال 118، سشن یک خط پایین تر
-      ObjectSetInteger(0, name, OBJPROP_YDISTANCE, 134);
+      // تایمر 160، فراکتال 178، سشن یک خط پایین تر
+      ObjectSetInteger(0, name, OBJPROP_YDISTANCE, 194);
       ObjectSetInteger(0, name, OBJPROP_FONTSIZE, 10);
       ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
    }
@@ -511,20 +567,25 @@ int OnInit()
    string chartIDStr = IntegerToString(ChartID());
    stateObjName = StateObjectName(ChartID());
 
+   // پیش فرض: همه الگوها روشن. اگر وضعیت ذخیره شده داشت، از همان خوانده می‌شود.
+   for(int p = 0; p < PATTERN_COUNT; p++) patternOn[p] = true;
+
    if(ObjectFind(0, stateObjName) >= 0)
    {
       string txt = ObjectGetString(0, stateObjName, OBJPROP_TEXT);
-      if(StringLen(txt) > 0)
+      string parts[];
+      int nParts = StringSplit(txt, '|', parts);
+
+      if(nParts >= 3)
       {
-         int p1end = StringFind(txt, "|");
-         int p2end = (p1end >= 0) ? StringFind(txt, "|", p1end + 1) : -1;
-         if(p1end >= 0 && p2end > p1end)
-         {
-            idxStructure = (int)StringToInteger(StringSubstr(txt, 0, p1end));
-            idxTrigger   = (int)StringToInteger(StringSubstr(txt, p1end + 1, p2end - (p1end + 1)));
-            idxEntry     = (int)StringToInteger(StringSubstr(txt, p2end + 1));
-         }
+         idxStructure = (int)StringToInteger(parts[0]);
+         idxTrigger   = (int)StringToInteger(parts[1]);
+         idxEntry     = (int)StringToInteger(parts[2]);
       }
+
+      // فیلدهای الگو از نسخه 1.01؛ آبجکت قدیمی آنها را ندارد
+      for(int p = 0; p < PATTERN_COUNT && 3 + p < nParts; p++)
+         patternOn[p] = (StringToInteger(parts[3 + p]) != 0);
    }
 
    idxStructure = ClampIdx(idxStructure, ArraySize(StructureTFList));
@@ -544,6 +605,7 @@ int OnInit()
    CreateTFButton("GOH_BtnStructure_" + chartIDStr, 10, 10, "STRUCT: " + TFToStr(StructureTF));
    CreateTFButton("GOH_BtnTrigger_"   + chartIDStr, 10, 40, "TRIG: "   + TFToStr(TriggerTF));
    CreateTFButton("GOH_BtnEntry_"     + chartIDStr, 10, 70, "ENTRY: "  + TFToStr(EntryTF));
+   DrawPatternButtons();
 
    lastBarTime      = 0;
    forceRedraw      = true;
@@ -608,6 +670,7 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
    if(id == CHARTEVENT_OBJECT_CLICK)
    {
       bool isOurObject = (sparam == btnStructName || sparam == btnTrigName || sparam == btnEntryName ||
+                          StringFind(sparam, "GOH_BtnPat")  == 0 ||
                           StringFind(sparam, "GOH_ListSt_") == 0 ||
                           StringFind(sparam, "GOH_ListTr_") == 0 ||
                           StringFind(sparam, "GOH_ListEn_") == 0);
@@ -623,6 +686,26 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
       }
       lastClickTime       = now;
       lastObjectClickTime = now;
+
+      if(StringFind(sparam, "GOH_BtnPat") == 0)
+      {
+         // نام: GOH_BtnPat<p>_<chartID>
+         int p = (int)StringToInteger(StringSubstr(sparam, StringLen("GOH_BtnPat")));
+         if(p >= 0 && p < PATTERN_COUNT)
+         {
+            patternOn[p] = !patternOn[p];
+            DrawPatternButton(p);
+            SaveState();
+
+            // آبجکت های الگوی خاموش شده باید همین حالا پاک شوند؛ forceRedraw
+            // فقط رسم دوباره را وادار می‌کند، پاک کردن الگوی حذف شده با
+            // DeleteObjectsOfTF داخل ProcessIndicator انجام می‌شود.
+            forceRedraw = true;
+            ProcessIndicator();
+         }
+         ChartRedraw();
+         return;
+      }
 
       if(sparam == btnStructName)
       {
@@ -921,6 +1004,51 @@ void DrawSwing(SwingAB &s, TFCategory cat, ENUM_TIMEFRAMES tf, color drawColor, 
 }
 
 //+------------------------------------------------------------------+
+// رسم یک Inside Bar: خط افقی از های و لوی مادر و (در صورت انتخاب) فرزند،
+// از خود کندل تا IBLineCandles کندل بعد از فرزند به سمت آینده بازار.
+// نام آبجکت ها با پیشوند همان تایم فریم است تا پاکسازی تعویض تایم فریم و
+// DeleteStaleTFObjects بدون تغییری شامل شان شود.
+void DrawInsideBar(InsideBar &ib, TFCategory cat, ENUM_TIMEFRAMES tf, int tfSecs)
+{
+   string base = GetTFPrefix(cat, tf) + "IB" + IntegerToString((long)ib.timeChild);
+   datetime lineEnd = ib.timeChild + tfSecs * IBLineCandles;
+
+   string names[4];
+   double lvl[4];
+   datetime from[4];
+   int nLines = 2;
+
+   names[0] = base + "_MH"; lvl[0] = ib.motherHigh; from[0] = ib.timeMother;
+   names[1] = base + "_ML"; lvl[1] = ib.motherLow;  from[1] = ib.timeMother;
+
+   if(IBShowChildLines)
+   {
+      names[2] = base + "_CH"; lvl[2] = ib.childHigh; from[2] = ib.timeChild;
+      names[3] = base + "_CL"; lvl[3] = ib.childLow;  from[3] = ib.timeChild;
+      nLines = 4;
+   }
+
+   for(int i = 0; i < nLines; i++)
+   {
+      if(ObjectFind(0, names[i]) >= 0) ObjectDelete(0, names[i]);
+      ObjectCreate(0, names[i], OBJ_TREND, 0, from[i], lvl[i], lineEnd, lvl[i]);
+      ObjectSetInteger(0, names[i], OBJPROP_COLOR, IBColor);
+      // خطوط مادر ممتد و پهن، خطوط فرزند خط چین و نازک تا از هم جدا باشند
+      ObjectSetInteger(0, names[i], OBJPROP_WIDTH, (i < 2) ? 2 : 1);
+      ObjectSetInteger(0, names[i], OBJPROP_STYLE, (i < 2) ? STYLE_SOLID : STYLE_DASH);
+      ObjectSetInteger(0, names[i], OBJPROP_RAY_RIGHT, false);
+   }
+
+   string lbl = base + "_LBL";
+   if(ObjectFind(0, lbl) >= 0) ObjectDelete(0, lbl);
+   ObjectCreate(0, lbl, OBJ_TEXT, 0, ib.timeMother, ib.motherHigh);
+   ObjectSetInteger(0, lbl, OBJPROP_COLOR, IBColor);
+   ObjectSetInteger(0, lbl, OBJPROP_FONTSIZE, 8);
+   ObjectSetInteger(0, lbl, OBJPROP_ANCHOR, ANCHOR_LOWER);
+   ObjectSetString(0, lbl, OBJPROP_TEXT, "IB");
+}
+
+//+------------------------------------------------------------------+
 // هشدار لحظات کلیدی. فقط برای رویدادی که روی آخرین کندل بسته شده رخ داده،
 // بنابراین هر رویداد دقیقا یک بار هشدار می‌دهد.
 void MaybeAlert(SwingAB &s, TFCategory cat, ENUM_TIMEFRAMES tf, int rates_total)
@@ -960,16 +1088,37 @@ void ProcessIndicator()
    datetime curBar = iTime(_Symbol, _Period, 0);
    if(curBar == 0) return;
 
+   bool abOn = patternOn[PATTERN_AB_HUNT];
+   bool ibOn = patternOn[PATTERN_INSIDE_BAR];
+
    // تشخیص، چرخه عمر و فیلترها همگی در GOD_OF_HUNTCore انجام می‌شوند تا اندیکاتور
    // و اسکنر دقیقا یک منطق داشته باشند. اینجا فقط رسم می‌ماند.
    MqlRates rates[];
    int rates_total = 0;
    SwingAB kept[];
+   int nKept = 0;
 
-   int nKept = AnalyzeSymbol(_Symbol, tf, ABCDHistoryBars, maxLookback,
-                             (cat == ENTRY), ShowPreviousABs,
-                             rates, rates_total, kept);
-   if(nKept < 0) return;
+   if(abOn)
+   {
+      nKept = AnalyzeSymbol(_Symbol, tf, ABCDHistoryBars, maxLookback,
+                            (cat == ENTRY), ShowPreviousABs,
+                            rates, rates_total, kept);
+      if(nKept < 0) return;
+   }
+
+   InsideBar ibs[];
+   int nIB = 0;
+
+   if(ibOn)
+   {
+      // اگر AB روشن است داده همین حالا کپی شده و دوباره کپی نمی‌شود
+      if(abOn) nIB = CollectInsideBars(rates, rates_total, ibs);
+      else
+      {
+         nIB = AnalyzeInsideBars(_Symbol, tf, ibs);
+         if(nIB < 0) return;
+      }
+   }
 
    // امضای وضعیت الگوهای قطعی شده. اگر عوض شود باید کامل بازترسیم کنیم،
    // حتی اگر هنوز کندل جدیدی باز نشده باشد.
@@ -1007,6 +1156,21 @@ void ProcessIndicator()
 
       if(fullRedraw && EnableABCD)
          MaybeAlert(kept[k], cat, tf, rates_total);
+   }
+
+   // Inside Bar ها فقط از کندل های بسته شده ساخته می‌شوند، پس فقط با کندل
+   // جدید عوض می‌شوند و رسمشان در بازترسیم کامل کافی است.
+   if(fullRedraw)
+   {
+      for(int k = 0; k < nIB; k++)
+      {
+         DrawInsideBar(ibs[k], cat, tf, tfSecs);
+
+         // ageCandles == 1 یعنی فرزند همین کندل قبلی بسته شده است؛ الگو یک
+         // بار، درست بعد از تشکیل، هشدار می‌دهد.
+         if(EnableAlerts && ibs[k].ageCandles == 1)
+            Alert("GOD_OF_HUNT ", _Symbol, " ", TFToStr(tf), ": Inside Bar");
+      }
    }
 
    ChartRedraw();
@@ -1060,6 +1224,7 @@ void OnDeinit(const int reason)
             StringFind(name, "GOH_BtnStructure_") == 0 ||
             StringFind(name, "GOH_BtnTrigger_") == 0 ||
             StringFind(name, "GOH_BtnEntry_") == 0 ||
+            StringFind(name, "GOH_BtnPat") == 0 ||
             StringFind(name, "GOH_State_") == 0 ||
             StringFind(name, "GOH_Cfg_") == 0 ||
             StringFind(name, "GOH_Timer_") == 0 ||

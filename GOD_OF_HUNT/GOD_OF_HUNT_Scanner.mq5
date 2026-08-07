@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                                     GOD_OF_HUNT_Scanner.mq5   v1.00   |
+//|                                     GOD_OF_HUNT_Scanner.mq5   v1.01   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
@@ -17,7 +17,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "1.00"
+#property version   "1.01"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
@@ -102,6 +102,7 @@ struct ScanRow
    int             symIndex;   // جای نماد در ScanSymbols، برای گروه بندی
    ENUM_TIMEFRAMES tf;
    int             tfIndex;
+   int             pattern;    // PatternId: کدام الگو این ردیف را ساخته
    bool            isBull;
    ABState         state;
    bool            hasBreak;
@@ -167,6 +168,86 @@ string   expandedSym[];
 int      expandedCount = 0;
 int      timerTicks  = 0;
 int      panelLeft = 0;   // مختصات چپ جدول، هر بار دوباره حساب می‌شود
+
+// تیک هر الگو: روشن یعنی اسکن بشود. با دکمه های بالا چپ چارت اسکنر عوض
+// می‌شود و در یک آبجکت مخفی می‌ماند تا با نصب دوباره یا تغییر تایم فریم
+// چارت میزبان از بین نرود.
+bool patScan[PATTERN_COUNT];
+
+string ScanPatStateObjName()
+{
+   return "GOHScanPat_" + IntegerToString(ChartID());
+}
+
+void SaveScanPatState()
+{
+   string name = ScanPatStateObjName();
+
+   if(ObjectFind(0, name) < 0)
+   {
+      if(ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0))
+      {
+         ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+         ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+      }
+   }
+
+   string txt = "";
+   for(int p = 0; p < PATTERN_COUNT; p++)
+   {
+      if(p > 0) txt += "|";
+      txt += patScan[p] ? "1" : "0";
+   }
+   ObjectSetString(0, name, OBJPROP_TEXT, txt);
+}
+
+void LoadScanPatState()
+{
+   for(int p = 0; p < PATTERN_COUNT; p++) patScan[p] = true;
+
+   string name = ScanPatStateObjName();
+   if(ObjectFind(0, name) < 0) return;
+
+   string parts[];
+   int n = StringSplit(ObjectGetString(0, name, OBJPROP_TEXT), '|', parts);
+   for(int p = 0; p < PATTERN_COUNT && p < n; p++)
+      patScan[p] = (StringToInteger(parts[p]) != 0);
+}
+
+// دکمه تیک الگو، بالا چپ چارت اسکنر (جدول به طور پیش فرض بالا راست است).
+string ScanPatButtonName(int p)
+{
+   return objPrefix + "PB" + IntegerToString(p);
+}
+
+void DrawScanPatternButton(int p)
+{
+   string name = ScanPatButtonName(p);
+
+   if(ObjectFind(0, name) < 0)
+   {
+      ObjectCreate(0, name, OBJ_BUTTON, 0, 0, 0);
+      ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+      ObjectSetInteger(0, name, OBJPROP_XDISTANCE, 10);
+      ObjectSetInteger(0, name, OBJPROP_YDISTANCE, 10 + 30 * p);
+      ObjectSetInteger(0, name, OBJPROP_XSIZE, 120);
+      ObjectSetInteger(0, name, OBJPROP_YSIZE, 20);
+      ObjectSetInteger(0, name, OBJPROP_FONTSIZE, 9);
+      ObjectSetInteger(0, name, OBJPROP_BORDER_TYPE, BORDER_FLAT);
+   }
+
+   ObjectSetInteger(0, name, OBJPROP_STATE, false);
+   ObjectSetInteger(0, name, OBJPROP_BGCOLOR, patScan[p] ? clrSeaGreen : clrDimGray);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, patScan[p] ? clrWhite : clrSilver);
+   ObjectSetString(0, name, OBJPROP_TEXT,
+                   (patScan[p] ? "[x] " : "[  ] ") + PatternName(p));
+}
+
+void DrawScanPatternButtons()
+{
+   for(int p = 0; p < PATTERN_COUNT; p++)
+      DrawScanPatternButton(p);
+}
 
 //+------------------------------------------------------------------+
 // برای گوشه راست از CORNER_RIGHT_UPPER استفاده نمی‌کنیم، چون آن حالت جهت
@@ -620,6 +701,7 @@ string HeaderText()
 
 string StateTextOf(ScanRow &r)
 {
+   if(r.pattern == PATTERN_INSIDE_BAR) return "IB";
    if(r.dead != AB_ALIVE)     return DeadReasonText(r.dead);
    if(r.state == AB_BROKEN)   return r.hasBreak ? "BREAK" : "HUNT";
    if(r.state == AB_RETRACED) return "C ok";
@@ -667,15 +749,21 @@ void ToggleExpanded(string sym)
 void DrawDataRow(ScanRow &r, int row, string symCell, string tfCell,
                  bool isGroup, bool showPos = true)
 {
+   // الگوی Inside Bar جهت ندارد؛ ستون DIR خنثی و رنگ ردیف رنگ متن جدول است
+   string dirCell = (r.pattern == PATTERN_INSIDE_BAR) ? "-"
+                                                      : (r.isBull ? "BULL" : "BEAR");
+
    string prefix = PadRight(symCell, 11) +
                    PadRight(tfCell, 5) +
-                   PadRight(r.isBull ? "BULL" : "BEAR", 5) +
+                   PadRight(dirCell, 5) +
                    PadRight(StateTextOf(r), 7) +
                    PadRight(r.newMark, 5);
 
    color rowColor = (r.goneAt > 0 || r.dead != AB_ALIVE)
                        ? PanelExpiredColor
-                       : (r.isBull ? PanelBullColor : PanelBearColor);
+                       : (r.pattern == PATTERN_INSIDE_BAR)
+                            ? PanelTextColor
+                            : (r.isBull ? PanelBullColor : PanelBearColor);
 
    string posSym = showPos ? r.symbol : "";
 
@@ -827,6 +915,10 @@ void UpdateGoneList(ScanRow &cur[], int nCur, ScanRow &all[], int nAll)
       // ردیفی که خودش با علت ابطال خاکستری شده، مهلت دوم نمی‌گیرد
       if(lastLive[i].goneAt > 0 || lastLive[i].dead != AB_ALIVE) continue;
 
+      // الگویی که تیکش برداشته شده با انتخاب کاربر رفته، نه با ابطال؛
+      // ردیف خاکستری «چه چیزی اعتبارش تمام شد» است و اینجا معنا ندارد.
+      if(!patScan[lastLive[i].pattern]) continue;
+
       bool stillHere = false;
       for(int j = 0; j < nCur; j++)
          if(cur[j].key == lastLive[i].key) { stillHere = true; break; }
@@ -868,6 +960,9 @@ void BuildPanelRows()
 
    for(int g = 0; g < goneCount; g++)
    {
+      // ردیف خاکستری الگویی که بعدا تیکش برداشته شده هم نمایش داده نمی‌شود
+      if(!patScan[goneRows[g].pattern]) continue;
+
       panelRows[panelRowCount] = goneRows[g];
       panelRowCount++;
    }
@@ -1010,13 +1105,17 @@ void RunScan()
          MqlRates rates[];
          int rates_total = 0;
          SwingAB active[];
+         int n = -1;
 
-         int n = AnalyzeSymbol(sym, tf, ABCDHistoryBars, 30, false, false,
-                               rates, rates_total, active);
+         if(patScan[PATTERN_AB_HUNT])
+         {
+            n = AnalyzeSymbol(sym, tf, ABCDHistoryBars, 30, false, false,
+                              rates, rates_total, active);
 
-         // داده هنوز آماده نیست؛ متاتریدر آن را در پس زمینه دانلود می‌کند
-         // و اسکن بعدی دوباره امتحان می‌کند
-         if(n < 0) continue;
+            // داده هنوز آماده نیست؛ متاتریدر آن را در پس زمینه دانلود می‌کند
+            // و اسکن بعدی دوباره امتحان می‌کند. الگوی IB پایین تر خودش داده
+            // را جدا می‌گیرد و دوباره امتحان می‌کند.
+         }
 
          for(int k = 0; k < n; k++)
          {
@@ -1075,6 +1174,7 @@ void RunScan()
             rows[nRows].symIndex  = si;
             rows[nRows].tf        = tf;
             rows[nRows].tfIndex   = ti;
+            rows[nRows].pattern   = PATTERN_AB_HUNT;
             rows[nRows].isBull    = active[k].isBull;
             rows[nRows].state     = active[k].state;
             rows[nRows].hasBreak  = active[k].hasValidBreak;
@@ -1099,6 +1199,72 @@ void RunScan()
             }
 
             nRows++;
+         }
+
+         // --- الگوی INSIDE BAR روی همین نماد و تایم فریم.
+         //
+         // rank ثابت 4 دارد: پایین تر از همه وضعیت های AB زنده (BREAK=0 تا
+         // WAIT=3) و بالاتر از مرده ها (5). یعنی در فیلتر COK_ONLY نمی‌آید و
+         // در FILTER_ALL و PRE_HUNT می‌آید.
+         if(patScan[PATTERN_INSIDE_BAR])
+         {
+            InsideBar ibs[];
+            int nIB = (n >= 0) ? CollectInsideBars(rates, rates_total, ibs)
+                               : AnalyzeInsideBars(sym, tf, ibs);
+
+            for(int k = 0; k < nIB; k++)
+            {
+               int rank = 4;
+
+               string key = sym + "|" + IntegerToString((int)tf) + "|IB|" +
+                            IntegerToString((long)ibs[k].timeChild);
+
+               int seenIdx = SeenIndex(key);
+               bool notify = false;
+
+               if(seenIdx < 0)
+               {
+                  // پسوند I تا اسم متغیر سراسری با AB ای که timeA اش همین
+                  // کندل است یکی نشود
+                  bool alreadyKnown = false;
+                  seenIdx = RememberSeen(key, GVName(sym, tf, ibs[k].timeChild) + "I",
+                                         !firstScanDone, alreadyKnown, rank);
+                  notify = (!alreadyKnown);
+               }
+
+               // IB چرخه عمر و گذار وضعیت ندارد؛ فقط اولین رویت خبر می‌دهد
+               if(notify && firstScanDone && EnablePush &&
+                  PassesFilter(rank, NotifyFilter))
+               {
+                  SendNotification("GOD_OF_HUNT " + sym + " " + TFToStr(tf) + " IB");
+               }
+
+               if(nRows >= ArraySize(rows)) ArrayResize(rows, nRows + 256);
+
+               rows[nRows].symbol    = sym;
+               rows[nRows].symIndex  = si;
+               rows[nRows].tf        = tf;
+               rows[nRows].tfIndex   = ti;
+               rows[nRows].pattern   = PATTERN_INSIDE_BAR;
+               rows[nRows].isBull    = false;   // IB جهت ندارد
+               rows[nRows].state     = AB_FORMING;
+               rows[nRows].hasBreak  = false;
+               rows[nRows].rank      = rank;
+               rows[nRows].groupRank = rank;
+               rows[nRows].key       = key;
+               rows[nRows].dead      = AB_ALIVE;
+               rows[nRows].goneAt    = 0;
+
+               rows[nRows].newMark = "";
+               if(NewMarkMinutes > 0 && seenFirst[seenIdx] > 0)
+               {
+                  int ageMin = (int)((TimeLocal() - seenFirst[seenIdx]) / 60);
+                  if(ageMin <= NewMarkMinutes)
+                     rows[nRows].newMark = IntegerToString(ageMin) + "m";
+               }
+
+               nRows++;
+            }
          }
       }
    }
@@ -1134,6 +1300,10 @@ void RunScan()
 int OnInit()
 {
    objPrefix = "GOHScan_" + IntegerToString(ChartID()) + "_";
+
+   LoadScanPatState();
+   SaveScanPatState();      // اگر آبجکت هنوز نبود، با پیش فرض ساخته شود
+   DrawScanPatternButtons();
 
    ArrayResize(seenKeys,  512);
    ArrayResize(seenFirst, 512);
@@ -1234,14 +1404,16 @@ void PointHunterTF(long chartId, ENUM_TIMEFRAMES tf)
    string obj = StateObjectName(chartId);
    if(ObjectFind(chartId, obj) < 0) return;
 
+   // فیلدهای بعد از سه اندیس (تیک الگوها از 1.01) باید دست نخورده برگردند،
+   // وگرنه هر کلیک روی ردیف جدول انتخاب الگوهای کاربر را ریست می‌کند.
    string txt = ObjectGetString(chartId, obj, OBJPROP_TEXT);
-   int p1 = StringFind(txt, "|");
-   int p2 = (p1 >= 0) ? StringFind(txt, "|", p1 + 1) : -1;
-   if(p1 < 0 || p2 <= p1) return;
+   string parts[];
+   int nParts = StringSplit(txt, '|', parts);
+   if(nParts < 3) return;
 
-   int i1 = (int)StringToInteger(StringSubstr(txt, 0, p1));
-   int i2 = (int)StringToInteger(StringSubstr(txt, p1 + 1, p2 - (p1 + 1)));
-   int i3 = (int)StringToInteger(StringSubstr(txt, p2 + 1));
+   int i1 = (int)StringToInteger(parts[0]);
+   int i2 = (int)StringToInteger(parts[1]);
+   int i3 = (int)StringToInteger(parts[2]);
 
    // بعضی تایم فریم ها در دو لیست هستند (مثلا H1 هم ساختار هم تریگر).
    // اولویت با ساختار است، بعد تریگر، بعد ورود.
@@ -1259,9 +1431,15 @@ void PointHunterTF(long chartId, ENUM_TIMEFRAMES tf)
       }
    }
 
-   ObjectSetString(chartId, obj, OBJPROP_TEXT,
-                   IntegerToString(i1) + "|" + IntegerToString(i2) + "|" +
-                   IntegerToString(i3));
+   string outTxt = IntegerToString(i1) + "|" + IntegerToString(i2) + "|" +
+                   IntegerToString(i3);
+   for(int k = 3; k < nParts; k++)
+   {
+      outTxt += "|";
+      outTxt += parts[k];
+   }
+
+   ObjectSetString(chartId, obj, OBJPROP_TEXT, outTxt);
 }
 
 // بردن چارت به نماد و تایم فریم یک ردیف
@@ -1312,6 +1490,22 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam,
    if(id == CHARTEVENT_CHART_CHANGE) { DrawPanel(); return; }
 
    if(id != CHARTEVENT_OBJECT_CLICK) return;
+
+   // دکمه تیک الگو: تغییر انتخاب و اسکن دوباره همان لحظه، نه اسکن بعدی
+   string patPrefix = objPrefix + "PB";
+   if(StringFind(sparam, patPrefix) == 0)
+   {
+      int p = (int)StringToInteger(StringSubstr(sparam, StringLen(patPrefix)));
+      if(p >= 0 && p < PATTERN_COUNT)
+      {
+         patScan[p] = !patScan[p];
+         SaveScanPatState();
+         DrawScanPatternButton(p);
+         timerTicks = 0;
+         RunScan();
+      }
+      return;
+   }
 
    string rowPrefix = objPrefix + "R";
    if(StringFind(sparam, rowPrefix) != 0) return;

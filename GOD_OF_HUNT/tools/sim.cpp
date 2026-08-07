@@ -407,5 +407,58 @@ int main()
       AConfirmBars = saved;
    }
 
+   // --- 16: INSIDE BAR — تشخیص، مقایسه اکید و پنجره سن.
+   //     تاچ (تساوی های یا لو) نباید الگو بسازد؛ فرزند فقط کندل بسته شده است.
+   {
+      g_bars.clear();
+
+      Bar(1.0000, 1.0100, 0.9900, 1.0050);   // 0: مادر
+      Bar(1.0040, 1.0060, 1.0000, 1.0020);   // 1: کاملا داخل 0  -> IB (فرزند=1)
+      Bar(1.0020, 1.0060, 0.9990, 1.0040);   // 2: لوی آن زیر لوی 1 -> IB نیست
+      Bar(1.0035, 1.0060, 1.0000, 1.0050);   // 3: های == های 2 (تاچ) -> IB نیست
+      Bar(1.0040, 1.0055, 1.0005, 1.0045);   // 4: کاملا داخل 3  -> IB (فرزند=4)
+      Bar(1.0045, 1.0050, 1.0010, 1.0030);   // 5: کندل جاری (بسته نشده حساب می‌شود)
+
+      int n = (int)g_bars.size();
+      static InsideBar ibs[8192];
+      int nIB = CollectInsideBars(g_bars.data(), n, ibs);
+
+      printf("\n=== inside bar detection   (%d bars)\n", n);
+      printf("  CollectInsideBars -> %d  (expected 2: child=1, child=4)\n", nIB);
+      for(int k = 0; k < nIB; k++)
+         printf("    ib[%d] mother=%d child=%d MH=%.4f ML=%.4f CH=%.4f CL=%.4f age=%d\n",
+                k, ibs[k].idxMother, ibs[k].idxChild, ibs[k].motherHigh,
+                ibs[k].motherLow, ibs[k].childHigh, ibs[k].childLow,
+                ibs[k].ageCandles);
+
+      if(nIB != 2 || ibs[0].idxChild != 1 || ibs[1].idxChild != 4)
+         printf("    !! FAIL: wrong inside-bar set\n");
+
+      // پنجره سن: با IBMaxAgeCandles=2 فقط فرزند 4 (سن 1) باید بماند؛
+      // فرزند 1 سن 4 دارد و بیرون پنجره است.
+      int savedAge = IBMaxAgeCandles;
+      IBMaxAgeCandles = 2;
+      nIB = CollectInsideBars(g_bars.data(), n, ibs);
+      printf("  IBMaxAgeCandles=2 -> %d  (expected 1: child=4)\n", nIB);
+      if(nIB != 1 || ibs[0].idxChild != 4)
+         printf("    !! FAIL: age window wrong\n");
+      IBMaxAgeCandles = savedAge;
+
+      // فرزند روی کندل جاری: کندل 5 داخل 4 نیست ولی حتی اگر بود نباید
+      // شمرده می‌شد. یک کندل داخل 5 اضافه می‌کنیم و چون بسته نشده (آخرین
+      // کندل آرایه است) نباید IB بسازد.
+      Bar(1.0035, 1.0045, 1.0015, 1.0040);   // 6: داخل 5 ولی کندل جاری
+      n = (int)g_bars.size();
+      nIB = CollectInsideBars(g_bars.data(), n, ibs);
+      // حالا کندل 5 بسته حساب می‌شود؛ 5 داخل 4 نیست (لوی 5 = 1.0010 بالای
+      // لوی 4 = 1.0005 است و های 5 = 1.0050 زیر های 4 = 1.0055 — پس داخل است!)
+      // یعنی انتظار: فرزند 5 هم اضافه می‌شود ولی فرزند 6 (کندل جاری) نه.
+      printf("  after one more bar -> %d  (expected 3: child=1,4,5 - not 6)\n", nIB);
+      bool has6 = false;
+      for(int k = 0; k < nIB; k++) if(ibs[k].idxChild == 6) has6 = true;
+      if(has6 || nIB != 3)
+         printf("    !! FAIL: forming candle must not be a child\n");
+   }
+
    return 0;
 }
