@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
-//|                                            GOD_OF_HUNT.mq5   v1.02   |
+//|                                            GOD_OF_HUNT.mq5   v1.03   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "1.02"
+#property version   "1.03"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
@@ -54,7 +54,8 @@ input bool   EnableAlerts         = false; // هشدار در لحظات کلی�
 
 //---- الگوی INSIDE BAR (رسم)
 // تشخیص در GOD_OF_HUNT_Core است (IBMaxAgeCandles)؛ اینها فقط رسم اند.
-input color  IBColor              = clrGold; // رنگ خطوط Inside Bar
+// رنگ IB همان رنگ دسته تایم فریم است (ساختار/تریگر/ورود) تا وقتی سطوح چند
+// تایم فریم روی هم می‌افتند معلوم باشد هر خط مال کدام است — مثل الگوی AB.
 input int    IBLineCandles        = 5;       // طول خط ها بعد از کندل فرزند (بر حسب کندل)
 input bool   IBShowChildLines     = true;    // خطوط های و لوی کندل فرزند هم رسم شود
 
@@ -391,6 +392,27 @@ void DrawPatternButtons()
 {
    for(int p = 0; p < PATTERN_COUNT; p++)
       DrawPatternButton(p);
+}
+
+// آبجکت وضعیت مرجع مشترک انتخاب الگوهاست: اسکنر هم می‌تواند در آن بنویسد
+// (دکمه های خودش)، پس هر ثانیه خوانده می‌شود و اگر با حافظه فرق داشت اعمال
+// می‌شود. برگشتی یعنی چیزی عوض شد و بازترسیم لازم است.
+bool ApplyPatternStateFromObject()
+{
+   if(ObjectFind(0, stateObjName) < 0) return false;
+
+   string parts[];
+   int nParts = StringSplit(ObjectGetString(0, stateObjName, OBJPROP_TEXT), '|', parts);
+
+   bool changed = false;
+   for(int p = 0; p < PATTERN_COUNT && 3 + p < nParts; p++)
+   {
+      bool v = (StringToInteger(parts[3 + p]) != 0);
+      if(v != patternOn[p]) { patternOn[p] = v; changed = true; }
+   }
+
+   if(changed) DrawPatternButtons();
+   return changed;
 }
 
 static ulong lastClickTime       = 0;   // ضد لرزش کلیک روی آبجکت های ما
@@ -1013,7 +1035,8 @@ void DrawSwing(SwingAB &s, TFCategory cat, ENUM_TIMEFRAMES tf, color drawColor, 
 // از خود کندل تا IBLineCandles کندل بعد از فرزند به سمت آینده بازار.
 // نام آبجکت ها با پیشوند همان تایم فریم است تا پاکسازی تعویض تایم فریم و
 // DeleteStaleTFObjects بدون تغییری شامل شان شود.
-void DrawInsideBar(InsideBar &ib, TFCategory cat, ENUM_TIMEFRAMES tf, int tfSecs)
+void DrawInsideBar(InsideBar &ib, TFCategory cat, ENUM_TIMEFRAMES tf, int tfSecs,
+                   color drawColor)
 {
    string base = GetTFPrefix(cat, tf) + "IB" + IntegerToString((long)ib.timeChild);
    datetime lineEnd = ib.timeChild + tfSecs * IBLineCandles;
@@ -1037,7 +1060,7 @@ void DrawInsideBar(InsideBar &ib, TFCategory cat, ENUM_TIMEFRAMES tf, int tfSecs
    {
       if(ObjectFind(0, names[i]) >= 0) ObjectDelete(0, names[i]);
       ObjectCreate(0, names[i], OBJ_TREND, 0, from[i], lvl[i], lineEnd, lvl[i]);
-      ObjectSetInteger(0, names[i], OBJPROP_COLOR, IBColor);
+      ObjectSetInteger(0, names[i], OBJPROP_COLOR, drawColor);
       // خطوط مادر ممتد و پهن، خطوط فرزند خط چین و نازک تا از هم جدا باشند
       ObjectSetInteger(0, names[i], OBJPROP_WIDTH, (i < 2) ? 2 : 1);
       ObjectSetInteger(0, names[i], OBJPROP_STYLE, (i < 2) ? STYLE_SOLID : STYLE_DASH);
@@ -1047,7 +1070,7 @@ void DrawInsideBar(InsideBar &ib, TFCategory cat, ENUM_TIMEFRAMES tf, int tfSecs
    string lbl = base + "_LBL";
    if(ObjectFind(0, lbl) >= 0) ObjectDelete(0, lbl);
    ObjectCreate(0, lbl, OBJ_TEXT, 0, ib.timeMother, ib.motherHigh);
-   ObjectSetInteger(0, lbl, OBJPROP_COLOR, IBColor);
+   ObjectSetInteger(0, lbl, OBJPROP_COLOR, drawColor);
    ObjectSetInteger(0, lbl, OBJPROP_FONTSIZE, 8);
    ObjectSetInteger(0, lbl, OBJPROP_ANCHOR, ANCHOR_LOWER);
    ObjectSetString(0, lbl, OBJPROP_TEXT, "IB");
@@ -1214,7 +1237,7 @@ void ProcessIndicator()
    {
       for(int k = 0; k < nIB; k++)
       {
-         DrawInsideBar(ibs[k], cat, tf, tfSecs);
+         DrawInsideBar(ibs[k], cat, tf, tfSecs, drawColor);
 
          // ageCandles == 1 یعنی فرزند همین کندل قبلی بسته شده است؛ الگو یک
          // بار، درست بعد از تشکیل، هشدار می‌دهد.
@@ -1254,6 +1277,10 @@ int OnCalculate(const int rates_total,
 //+------------------------------------------------------------------+
 void OnTimer()
 {
+   // انتخاب الگوها ممکن است از سمت اسکنر عوض شده باشد
+   if(ApplyPatternStateFromObject())
+      forceRedraw = true;
+
    // برای وقتی که بازار تیک ندارد ولی کندل بسته می‌شود یا کاربر تایم فریم را عوض کرده
    ProcessIndicator();
    UpdateCandleTimer();

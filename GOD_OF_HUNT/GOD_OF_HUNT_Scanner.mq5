@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                                     GOD_OF_HUNT_Scanner.mq5   v1.02   |
+//|                                     GOD_OF_HUNT_Scanner.mq5   v1.03   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
@@ -17,7 +17,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "1.02"
+#property version   "1.03"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
@@ -93,6 +93,14 @@ input bool   GroupBySymbol     = true; // نمادی که در چند تایم �
 // چارت باید گروه را باز کنید و روی خود تایم فریم کلیک کنید.
 input ClickTargetMode ClickTarget = CLICK_HUNTER_CHART; // کلیک روی ردیف چه چارتی را عوض کند
 input bool   ClickSetsHunterTF   = true;  // دکمه تایم فریم اندیکاتور هم روی همان تایم فریم تنظیم شود
+
+//---- همگام سازی انتخاب الگوها با چارت اندیکاتور
+// خاموش کردن یک الگو روی هر کدام (چارت یا اسکنر) روی دیگری هم اثر می‌کند.
+// مرجع، آبجکت وضعیت چارت اندیکاتور است؛ اسکنر هر ثانیه آن را می‌خواند و
+// دکمه های خودش هم همانجا می‌نویسند. اگر اسکنر روی پروفایل جدا باشد چارت
+// اندیکاتور دیده نمی‌شود (محدودیت ChartFirst/ChartNext) و دکمه های خود
+// اسکنر تنها مرجع می‌مانند.
+input bool   SyncPatternsWithChart = true;
 
 //+------------------------------------------------------------------+
 // یک ردیف جدول
@@ -247,6 +255,75 @@ void DrawScanPatternButtons()
 {
    for(int p = 0; p < PATTERN_COUNT; p++)
       DrawScanPatternButton(p);
+}
+
+// خواندن انتخاب الگوها از آبجکت وضعیت اولین چارت اندیکاتور. برگشتی یعنی
+// چیزی با patScan فرق داشت و اعمال شد (جدول باید از نو ساخته شود).
+bool SyncPatternsFromHunterChart()
+{
+   long id = ChartFirst();
+
+   while(id >= 0)
+   {
+      string obj = StateObjectName(id);
+
+      if(ObjectFind(id, obj) >= 0)
+      {
+         string parts[];
+         int nParts = StringSplit(ObjectGetString(id, obj, OBJPROP_TEXT), '|', parts);
+         if(nParts < 3 + PATTERN_COUNT) return false;   // اندیکاتور نسخه قدیمی
+
+         bool changed = false;
+         for(int p = 0; p < PATTERN_COUNT; p++)
+         {
+            bool v = (StringToInteger(parts[3 + p]) != 0);
+            if(v != patScan[p]) { patScan[p] = v; changed = true; }
+         }
+
+         if(changed)
+         {
+            SaveScanPatState();
+            DrawScanPatternButtons();
+         }
+         return changed;
+      }
+
+      id = ChartNext(id);
+   }
+
+   return false;
+}
+
+// نوشتن انتخاب الگوهای اسکنر روی آبجکت وضعیت همه چارت های اندیکاتور، تا
+// دکمه های آن سمت هم (از OnTimer خودشان) همراه شوند. سه فیلد اول — اندیس
+// تایم فریم های هر چارت — دست نمی‌خورند.
+void WritePatternsToHunterCharts()
+{
+   long id = ChartFirst();
+
+   while(id >= 0)
+   {
+      string obj = StateObjectName(id);
+
+      if(ObjectFind(id, obj) >= 0)
+      {
+         string parts[];
+         int nParts = StringSplit(ObjectGetString(id, obj, OBJPROP_TEXT), '|', parts);
+
+         if(nParts >= 3)
+         {
+            string txt = parts[0] + "|" + parts[1] + "|" + parts[2];
+            for(int p = 0; p < PATTERN_COUNT; p++)
+            {
+               txt += "|";
+               txt += patScan[p] ? "1" : "0";
+            }
+            ObjectSetString(id, obj, OBJPROP_TEXT, txt);
+         }
+      }
+
+      id = ChartNext(id);
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -1367,6 +1444,7 @@ int OnInit()
 
    LoadScanPatState();
    SaveScanPatState();      // اگر آبجکت هنوز نبود، با پیش فرض ساخته شود
+   if(SyncPatternsWithChart) SyncPatternsFromHunterChart();
    DrawScanPatternButtons();
 
    ArrayResize(seenKeys,  512);
@@ -1419,6 +1497,15 @@ void RefreshLive()
 void OnTimer()
 {
    timerTicks++;
+
+   // اگر انتخاب الگوها روی چارت اندیکاتور عوض شده، جدول همان لحظه با
+   // انتخاب جدید ساخته می‌شود نه در اسکن بعدی.
+   if(SyncPatternsWithChart && SyncPatternsFromHunterChart())
+   {
+      timerTicks = 0;
+      RunScan();
+      return;
+   }
 
    int period = RefreshSeconds;
    if(period < 5) period = 5;
@@ -1565,6 +1652,10 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam,
          patScan[p] = !patScan[p];
          SaveScanPatState();
          DrawScanPatternButton(p);
+
+         // دکمه های چارت اندیکاتور هم همراه شوند
+         if(SyncPatternsWithChart) WritePatternsToHunterCharts();
+
          timerTicks = 0;
          RunScan();
       }
