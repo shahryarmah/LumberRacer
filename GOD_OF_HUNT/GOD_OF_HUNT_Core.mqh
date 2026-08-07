@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                                        GOD_OF_HUNT_Core.mqh   v1.03   |
+//|                                        GOD_OF_HUNT_Core.mqh   v1.04   |
 //|                                                                  |
 //| منطق مشترک تشخیص سویینگ و چرخه عمر الگوی ABCD.                   |
 //| هم GOD_OF_HUNT.mq5 (اندیکاتور چارت) و هم GOD_OF_HUNT_Scanner.mq5           |
@@ -58,7 +58,7 @@ input int    IBMaxAgeCandles      = 5;     // الگو تا چند کندل بع
 // سه کندلی، توسعه یافته Inside Bar: مادر + فرزند (همان شرایط IB با مقایسه
 // اکید)، و بعد کندل سیگنال که پشت های/لوی مادر در جهت سویینگ کلوز می‌کند.
 // مادر باید انتهای یک سویینگ شارپ باشد.
-input double TickMotherBodyPercent = 80.0; // حداقل درصد بادی کندل مادر
+input double TickMotherBodyPercent = 50.0; // حداقل درصد بادی کندل مادر
 input int    TickSwingMinCandles   = 3;    // حداقل کندل هم جهت سویینگ منتهی به مادر (خود مادر حساب است)
 input double TickSwingBodyPercent  = 60.0; // شارپ بودن: بدنه ها حداقل این درصد از گستره سویینگ را بپوشانند
 input int    TickSignalMaxCandles  = 5;    // سیگنال حداکثر تا این تعداد کندل بعد از فرزند، وگرنه بی اعتبار
