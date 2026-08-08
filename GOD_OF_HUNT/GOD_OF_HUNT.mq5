@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
-//|                                            GOD_OF_HUNT.mq5   v1.05   |
+//|                                            GOD_OF_HUNT.mq5   v1.06   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "1.05"
+#property version   "1.06"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
@@ -639,6 +639,11 @@ int OnInit()
    lastConfirmedSig = "";
 
    EventSetTimer(1);
+
+   // همین لحظه رسم شود، نه با اولین تیک بازار.
+   // بدون این، وقتی بازار تیک ندارد (آخر هفته یا نماد کم معامله) چارت تا
+   // اولین اجرای تایمر خالی می‌ماند.
+   ProcessIndicator();
 
    UpdateCandleTimer();
    UpdateFractalTFLabel();

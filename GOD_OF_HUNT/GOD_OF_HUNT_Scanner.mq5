@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                                     GOD_OF_HUNT_Scanner.mq5   v1.05   |
+//|                                     GOD_OF_HUNT_Scanner.mq5   v1.06   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
@@ -17,7 +17,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "1.05"
+#property version   "1.06"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
@@ -181,6 +181,20 @@ int      panelLeft = 0;   // مختصات چپ جدول، هر بار دوبار
 // می‌شود و در یک آبجکت مخفی می‌ماند تا با نصب دوباره یا تغییر تایم فریم
 // چارت میزبان از بین نرود.
 bool patScan[PATTERN_COUNT];
+
+// --- اسکن سریع تا وقتی داده کامل شود.
+//
+// متاتریدر تاریخچه هر نماد و تایم فریم را در پس زمینه دانلود می‌کند، پس
+// اولین اسکن بعد از نصب معمولا برای بیشتر نمادها داده ندارد و جدول خالی
+// می‌ماند. با فاصله عادی اسکن (RefreshSeconds) یعنی یک دقیقه نگاه کردن به
+// لیست خالی. تا وقتی داده ناقص است اسکن هر ScanRetrySeconds ثانیه تکرار
+// می‌شود، و به محض کامل شدن به فاصله عادی برمی‌گردد.
+#define SCAN_RETRY_SECONDS 3
+#define SCAN_RETRY_MAX     40   // سقف تلاش سریع، تا نمادِ واقعا بی داده حلقه نسازد
+
+bool scanDataIncomplete = false;   // در آخرین اسکن، جایی داده آماده نبود
+int  scanRetriesLeft    = SCAN_RETRY_MAX;
+int  scanPeriodNow      = 60;      // فاصله موثر همین چرخه (برای شمارش معکوس سربرگ)
 
 string ScanPatStateObjName()
 {
@@ -760,10 +774,7 @@ string TwoDigits(int v)
 // عددهای جدول چقدر کهنه اند و سیکل به کجا رسیده.
 string HeaderText()
 {
-   int period = RefreshSeconds;
-   if(period < 5) period = 5;
-
-   int left = period - timerTicks;
+   int left = scanPeriodNow - timerTicks;
    if(left < 0) left = 0;
 
    // تعداد نماد و تایم فریم عمدا نوشته نمی‌شود؛ خود شما آن را تنظیم کرده اید.
@@ -1172,6 +1183,8 @@ void RunScan()
    BuildTFList();
    CheckConfigMatch();
 
+   scanDataIncomplete = false;   // در طول اسکن، هر داده ناقصی علامتش می‌زند
+
    ScanRow rows[];
    int nRows = 0;
    ArrayResize(rows, 256);
@@ -1197,6 +1210,7 @@ void RunScan()
             // داده هنوز آماده نیست؛ متاتریدر آن را در پس زمینه دانلود می‌کند
             // و اسکن بعدی دوباره امتحان می‌کند. الگوی IB پایین تر خودش داده
             // را جدا می‌گیرد و دوباره امتحان می‌کند.
+            if(n < 0) scanDataIncomplete = true;
          }
 
          for(int k = 0; k < n; k++)
@@ -1293,6 +1307,7 @@ void RunScan()
             InsideBar ibs[];
             int nIB = (n >= 0) ? CollectInsideBars(rates, rates_total, ibs)
                                : AnalyzeInsideBars(sym, tf, ibs);
+            if(nIB < 0) scanDataIncomplete = true;
 
             for(int k = 0; k < nIB; k++)
             {
@@ -1360,6 +1375,7 @@ void RunScan()
             TickFractal tks[];
             int nTK = (n >= 0) ? CollectTickFractals(rates, rates_total, tks)
                                : AnalyzeTickFractals(sym, tf, tks);
+            if(nTK < 0) scanDataIncomplete = true;
 
             for(int k = 0; k < nTK; k++)
             {
@@ -1437,10 +1453,26 @@ void RunScan()
    for(int i = 0; i < nLive; i++) lastLive[i] = live[i];
    lastLiveCount = nLive;
 
+   // فاصله تا اسکن بعدی: تا وقتی داده ناقص است کوتاه، بعد عادی
+   bool retrying = (scanDataIncomplete && scanRetriesLeft > 0);
+
+   if(retrying)
+   {
+      scanRetriesLeft--;
+      scanPeriodNow = SCAN_RETRY_SECONDS;
+   }
+   else
+   {
+      scanPeriodNow = (RefreshSeconds < 5) ? 5 : RefreshSeconds;
+   }
+
    BuildPanelRows();
    DrawPanel();
 
-   firstScanDone = true;
+   // اسکن «اول» یعنی اولین اسکنی که داده اش کامل بوده. اسکن های ناقص فقط
+   // ثبت می‌کنند و خبر نمی‌دهند، وگرنه لحظه ای که تاریخچه دانلود می‌شود
+   // انبوه نوتیفیکیشن از الگوهای قدیمی می‌آید.
+   if(!retrying) firstScanDone = true;
 }
 
 //+------------------------------------------------------------------+
@@ -1470,10 +1502,14 @@ int OnInit()
    BuildSymbolList();
    BuildTFList();
 
-   timerTicks = 0;
-   liveCount  = 0;
+   timerTicks       = 0;
+   liveCount        = 0;
+   scanRetriesLeft  = SCAN_RETRY_MAX;
+   scanPeriodNow    = (RefreshSeconds < 5) ? 5 : RefreshSeconds;
    EventSetTimer(1);   // هر ثانیه؛ اسکن کامل داخل OnTimer شمرده می‌شود
 
+   // اسکن همین لحظه، نه بعد از یک دوره تایمر. اگر تاریخچه هنوز دانلود نشده
+   // باشد RunScan خودش فاصله بعدی را کوتاه می‌کند تا جدول زود پر شود.
    RunScan();
    return(INIT_SUCCEEDED);
 }
@@ -1513,10 +1549,7 @@ void OnTimer()
       return;
    }
 
-   int period = RefreshSeconds;
-   if(period < 5) period = 5;
-
-   if(timerTicks >= period)
+   if(timerTicks >= scanPeriodNow)
    {
       timerTicks = 0;
       RunScan();

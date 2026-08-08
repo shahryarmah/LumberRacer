@@ -537,5 +537,46 @@ int main()
       TickMaxAgeCandles = savedTkAge;
    }
 
+   // --- 18: سیگنال با رد شدن سایه، بدون کلوز — و روی کندل در حال تشکیل.
+   //     از 1.06 «کلوز پشت مادر» لازم نیست و کندل بسته نشده هم سیگنال است.
+   {
+      g_bars.clear();
+
+      Bar(1.0000, 1.0005, 0.9995, 1.0000);   // 0: خنثی
+      Bar(1.0000, 1.0002, 0.9948, 0.9950);   // 1: نزولی
+      Bar(0.9950, 0.9952, 0.9898, 0.9900);   // 2: نزولی
+      Bar(0.9900, 0.9902, 0.9848, 0.9850);   // 3: مادر (لو = 0.9848)
+      Bar(0.9870, 0.9880, 0.9855, 0.9860);   // 4: فرزند داخل مادر
+      // 5: سایه تا 0.9840 زیر لوی مادر می‌رود ولی بالای آن کلوز می‌کند.
+      //    با قاعده قدیم سیگنال نبود، با قاعده جدید هست.
+      Bar(0.9860, 0.9865, 0.9840, 0.9862);
+      Bar(0.9862, 0.9870, 0.9850, 0.9865);   // 6: کندل جاری
+
+      int n = (int)g_bars.size();
+      static TickFractal tks[8192];
+      int nTK = CollectTickFractals(g_bars.data(), n, tks);
+
+      printf("\n=== tick signal by wick, no close needed   (%d bars)\n", n);
+      printf("  CollectTickFractals -> %d  (expected 1, signal=5)\n", nTK);
+      for(int k = 0; k < nTK; k++)
+         printf("    tk[%d] %s mother=%d child=%d signal=%d p3=%.4f age=%d\n",
+                k, tks[k].isBull ? "BULL" : "BEAR", tks[k].idxMother,
+                tks[k].idxChild, tks[k].idxSignal, tks[k].p3, tks[k].ageCandles);
+
+      if(nTK != 1 || tks[0].idxSignal != 5)
+         printf("    !! FAIL: wick cross must trigger the signal\n");
+      else if(tks[0].p3 != 0.9840)
+         printf("    !! FAIL: third point must be the signal candle's low\n");
+
+      // کندل در حال تشکیل هم می‌تواند سیگنال باشد: همان سری، ولی کندل 5
+      // آخرین کندل آرایه (یعنی هنوز بسته نشده) است.
+      g_bars.pop_back();
+      n = (int)g_bars.size();
+      nTK = CollectTickFractals(g_bars.data(), n, tks);
+      printf("  signal on the forming candle -> %d  (expected 1, signal=5 age=0)\n", nTK);
+      if(nTK != 1 || tks[0].idxSignal != 5 || tks[0].ageCandles != 0)
+         printf("    !! FAIL: forming candle must be allowed as signal\n");
+   }
+
    return 0;
 }

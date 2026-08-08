@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                                        GOD_OF_HUNT_Core.mqh   v1.05   |
+//|                                        GOD_OF_HUNT_Core.mqh   v1.06   |
 //|                                                                  |
 //| منطق مشترک تشخیص سویینگ و چرخه عمر الگوی ABCD.                   |
 //| هم GOD_OF_HUNT.mq5 (اندیکاتور چارت) و هم GOD_OF_HUNT_Scanner.mq5           |
@@ -1342,8 +1342,10 @@ int AnalyzeInsideBars(string symbol, ENUM_TIMEFRAMES tf, InsideBar &out[])
 //   ۱. مادر + فرزند دقیقا با شرایط IB (فرزند اکیدا داخل مادر).
 //   ۲. مادر حداقل TickMotherBodyPercent بادی دارد و انتهای سویینگ است:
 //      در جهت خودش افراطی ترین نقطه TickSwingLookback کندل قبلش.
-//   ۳. کندل سیگنال در جهت سویینگ پشت های/لوی مادر «کلوز» می‌کند و باید
-//      حداکثر TickSignalMaxCandles کندل بعد از فرزند بیاید، وگرنه بی اعتبار.
+//   ۳. کندل سیگنال در جهت سویینگ از های/لوی مادر «رد می‌شود» — به محض رد
+//      شدن، حتی با سایه و بدون کلوز. باید حداکثر TickSignalMaxCandles کندل
+//      بعد از فرزند بیاید، وگرنه بی اعتبار. کندل در حال تشکیل هم می‌تواند
+//      سیگنال باشد.
 //
 // رسم: در سویینگ نزولی از لوی مادر به لوی فرزند و از لوی فرزند به لوی
 // سیگنال خط کشیده می‌شود؛ در صعودی همین با های ها — که شکل تیک می‌سازد.
@@ -1400,9 +1402,16 @@ int CollectTickFractals(MqlRates &rates[], int rates_total, TickFractal &out[])
    int  last   = rates_total - 1;
    long dayNow = (long)rates[last].time / 86400;
 
-   // سیگنال باید هم بسته شده باشد و هم یا داخل پنجره سن باشد یا انقضایش
-   // (سیگنال + TickMaxAgeCandles + 1) داخل روز جاری افتاده باشد.
-   int lastSignal  = rates_total - 2;
+   // سیگنال یا داخل پنجره سن است یا انقضایش (سیگنال + TickMaxAgeCandles + 1)
+   // داخل روز جاری افتاده.
+   //
+   // برخلاف IB، کندل در حال تشکیل هم می‌تواند سیگنال باشد و این repaint
+   // نمی‌کند: سقف (و کف) یک کندل در حال تشکیل هیچ وقت برنمی‌گردد، پس وقتی
+   // قیمت از های/لوی مادر رد شد تا بسته شدن کندل رد شده می‌ماند. تنها چیزی
+   // که تا بسته شدن کندل حرکت می‌کند، خود نقطه سوم خط تیک است (p3)، چون
+   // سایه ممکن است کشیده تر شود. همان قاعده ای که در چرخه عمر AB برای شکست
+   // سطح B هم به کار رفته است.
+   int lastSignal  = rates_total - 1;
    int firstSignal = last - TickMaxAgeCandles;
    int firstSignalToday = FirstCandleOfToday(rates, rates_total) - TickMaxAgeCandles - 1;
    if(firstSignalToday < firstSignal) firstSignal = firstSignalToday;
@@ -1433,17 +1442,18 @@ int CollectTickFractals(MqlRates &rates[], int rates_total, TickFractal &out[])
       // --- مادر انتهای سویینگ
       if(!TickSwingEnd(rates, mo, bull)) continue;
 
-      // --- کندل سیگنال: اولین کلوز پشت های/لوی مادر در جهت سویینگ،
-      //     حداکثر TickSignalMaxCandles کندل بعد از فرزند و فقط کندل بسته شده
+      // --- کندل سیگنال: اولین کندلی که در جهت سویینگ از های/لوی مادر رد
+      //     می‌شود. کلوز لازم نیست — رد شدن سایه کافی است — و کندل در حال
+      //     تشکیل هم قبول است. حداکثر TickSignalMaxCandles کندل بعد از فرزند.
       int sEnd = m + TickSignalMaxCandles;
       if(sEnd > lastSignal) sEnd = lastSignal;
 
       int idxSignal = -1;
       for(int s = m + 1; s <= sEnd; s++)
       {
-         bool closedBeyond = bull ? (rates[s].close > rates[mo].high)
-                                  : (rates[s].close < rates[mo].low);
-         if(closedBeyond) { idxSignal = s; break; }
+         bool crossed = bull ? (rates[s].high > rates[mo].high)
+                             : (rates[s].low  < rates[mo].low);
+         if(crossed) { idxSignal = s; break; }
       }
       if(idxSignal < 0) continue;
 
