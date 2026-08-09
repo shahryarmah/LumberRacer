@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
-//|                                            GOD_OF_HUNT.mq5   v1.06   |
+//|                                            GOD_OF_HUNT.mq5   v1.07   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "1.06"
+#property version   "1.07"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
@@ -187,6 +187,58 @@ void DeleteObjectsOfTF(TFCategory cat, ENUM_TIMEFRAMES tf)
 void DeleteLiveObjectsOfTF(TFCategory cat, ENUM_TIMEFRAMES tf)
 {
    DeleteByPrefix(GetTFPrefix(cat, tf) + "L_");
+}
+
+// آیا این آبجکت مال این الگوست؟
+//
+// قالب نام: <cat>_<tf>_<mark>...  و نشانه الگو بعد از دومین آندرلاین است:
+//   AB HUNT      -> "L" (سویینگ زنده) یا "C" (قطعی شده)
+//   INSIDE BAR   -> "IB"
+//   TICK FRACTAL -> "TK"
+bool ObjectBelongsToPattern(string name, int p)
+{
+   if(StringFind(name, "gohst_") != 0 &&
+      StringFind(name, "gohtr_") != 0 &&
+      StringFind(name, "gohen_") != 0) return false;
+
+   int p1 = StringFind(name, "_");
+   int p2 = (p1 >= 0) ? StringFind(name, "_", p1 + 1) : -1;
+   if(p2 < 0) return false;
+
+   string mark2 = StringSubstr(name, p2 + 1, 2);
+   string mark1 = StringSubstr(name, p2 + 1, 1);
+
+   if(p == PATTERN_INSIDE_BAR)   return (mark2 == "IB");
+   if(p == PATTERN_TICK_FRACTAL) return (mark2 == "TK");
+   if(p == PATTERN_AB_HUNT)      return (mark1 == "L" || mark1 == "C");
+   return false;
+}
+
+// آبجکت های هر الگوی خاموش را در همه دسته ها و تایم فریم ها پاک می‌کند.
+//
+// پاک کردن دسته و تایم فریم جاری (کاری که ProcessIndicator می‌کند) کافی
+// نیست: آبجکت تایم فریم های بالاتر عمدا روی چارت می‌ماند تا کار فراکتالی
+// ممکن باشد، پس با خاموش کردن یک الگو باید صریح سراغشان رفت. وگرنه
+// خطوطی که در تایم فریم دیگری رسم شده اند تا ابد روی چارت می‌مانند.
+//
+// فقط موقع تغییر انتخاب صدا زده می‌شود، نه در هر تیک تایمر.
+void DeleteOffPatternObjects()
+{
+   int total = ObjectsTotal(0);
+
+   for(int i = total - 1; i >= 0; i--)
+   {
+      string name = ObjectName(0, i);
+
+      for(int p = 0; p < PATTERN_COUNT; p++)
+      {
+         if(patternOn[p]) continue;
+         if(!ObjectBelongsToPattern(name, p)) continue;
+
+         ObjectDelete(0, name);
+         break;
+      }
+   }
 }
 
 void CheckTFChangeAndDelete()
@@ -411,7 +463,11 @@ bool ApplyPatternStateFromObject()
       if(v != patternOn[p]) { patternOn[p] = v; changed = true; }
    }
 
-   if(changed) DrawPatternButtons();
+   if(changed)
+   {
+      DrawPatternButtons();
+      DeleteOffPatternObjects();   // انتخاب از سمت اسکنر آمده، ولی پاکسازی یکی است
+   }
    return changed;
 }
 
@@ -640,6 +696,9 @@ int OnInit()
 
    EventSetTimer(1);
 
+   // آبجکت الگوی خاموش ممکن است از نصب قبلی روی چارت مانده باشد
+   DeleteOffPatternObjects();
+
    // همین لحظه رسم شود، نه با اولین تیک بازار.
    // بدون این، وقتی بازار تیک ندارد (آخر هفته یا نماد کم معامله) چارت تا
    // اولین اجرای تایمر خالی می‌ماند.
@@ -729,9 +788,10 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
             DrawPatternButton(p);
             SaveState();
 
-            // آبجکت های الگوی خاموش شده باید همین حالا پاک شوند؛ forceRedraw
-            // فقط رسم دوباره را وادار می‌کند، پاک کردن الگوی حذف شده با
-            // DeleteObjectsOfTF داخل ProcessIndicator انجام می‌شود.
+            // آبجکت های الگوی خاموش شده در همه تایم فریم ها پاک می‌شوند،
+            // نه فقط تایم فریم جاری که ProcessIndicator می‌بیند.
+            DeleteOffPatternObjects();
+
             forceRedraw = true;
             ProcessIndicator();
          }
