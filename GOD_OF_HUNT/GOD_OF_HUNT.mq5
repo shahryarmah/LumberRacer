@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
-//|                                            GOD_OF_HUNT.mq5   v1.08   |
+//|                                            GOD_OF_HUNT.mq5   v1.09   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "1.08"
+#property version   "1.09"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
@@ -23,72 +23,73 @@ ENUM_TIMEFRAMES prevStructureTF = 0;
 ENUM_TIMEFRAMES prevTriggerTF   = 0;
 ENUM_TIMEFRAMES prevEntryTF     = 0;
 
-//---- رنگ ها با قابل تغییر توسط کاربر
-input color  StructureColor = clrDeepSkyBlue;  // رنگ ساختار
-input color  TriggerColor   = clrOrange;       // رنگ تریگر
-input color  EntryColor     = clrViolet;       // رنگ ورود
-input color  LabelColor     = clrBlack;        // رنگ لیبل ها
+// ورودی ها با input group دسته بندی شده اند تا معلوم باشد هر پارامتر مال
+// کدام الگوست. ترتیب نمایش در پنجره تنظیمات = ترتیب اعلان، و چون
+// GOD_OF_HUNT_Core.mqh بالاتر include شده، اول دسته های «تشخیص» آن می‌آیند
+// و بعد دسته های «رسم» همین فایل.
 
-//---- تنظیمات اصلی
-input int    MaxLookbackStructure = 7;    // تعداد کندل برای ساختار (وقتی ABCD خاموش است)
-input int    MaxLookbackTrigger   = 15;   // تعداد کندل برای تریگر (وقتی ABCD خاموش است)
-input int    MaxLookbackEntry     = 30;   // تعداد کندل برای ورود
+//==================== عمومی — مشترک بین هر سه الگو ====================
+input group "=== عمومی (هر سه الگو) ==="
+// رنگ بر اساس دسته تایم فریم است نه بر اساس الگو، تا وقتی سطوح چند تایم
+// فریم روی هم می‌افتند معلوم باشد هر خط مال کدام تایم فریم است.
+input color  StructureColor       = clrDeepSkyBlue;  // رنگ تایم فریم ساختار
+input color  TriggerColor         = clrOrange;       // رنگ تایم فریم تریگر
+input color  EntryColor           = clrViolet;       // رنگ تایم فریم ورود
+input bool   EnableAlerts         = false;           // هشدار در لحظات کلیدی (هر سه الگو)
+input bool   ShowDeadPatterns     = true;            // نمایش الگوی باطل/منقضی امروز
+input color  DeadPatternColor     = clrGray;         // رنگ الگوی باطل/منقضی
+
+//==================== AB HUNT — رسم ====================
+input group "=== AB HUNT — رسم ==="
+input color  LabelColor           = clrBlack; // رنگ لیبل های A و B و C
 input int    LineBLength          = 10;   // طول خط ادامه از B (بر حسب کندل)
 input int    LineMidLength        = 15;   // طول خط میانی (بر حسب کندل)
-input int    FVGExtendCandles     = 10;
-input bool   ShowFVG              = true;
 input int    LabelShiftCandles    = 1;    // تعداد کندل شیفت لیبل ها
-
-//---- تنظیمات نمایش AB
-input bool   ShowPreviousABs      = false; // نمایش AB های قبلی (وقتی ABCD خاموش است)
-
-//---- نمایش الگو روی چارت
 input bool   Show20PercentLine    = true;  // رسم خط حداقل اصلاح (20 درصد)
 input bool   ShowMaxRetraceLine   = true;  // رسم خط حداکثر اصلاح (60 درصد)
 input bool   ShowStateLabel       = true;  // نمایش وضعیت الگو کنار خط B
 input bool   ExtendBLineToNow     = true;  // ادامه خط B تا کندل جاری تا وقتی الگو فعال است
-
-//---- سیگنال و هشدار
 input bool   ShowEntrySignal      = true;  // نمایش فلش سیگنال ورود
-input bool   EnableAlerts         = false; // هشدار در لحظات کلیدی
+input int    FVGExtendCandles     = 10;    // طول کادر FVG (بر حسب کندل)
+input bool   ShowFVG              = true;  // رسم کادر FVG داخل AB
+// این سه فقط وقتی EnableABCD خاموش است اثر دارند
+input int    MaxLookbackStructure = 7;     // کندل ساختار (فقط وقتی ABCD خاموش)
+input int    MaxLookbackTrigger   = 15;    // کندل تریگر (فقط وقتی ABCD خاموش)
+input int    MaxLookbackEntry     = 30;    // کندل ورود (فقط وقتی ABCD خاموش)
+input bool   ShowPreviousABs      = false; // نمایش AB های قبلی (فقط وقتی ABCD خاموش)
 
-//---- الگوی INSIDE BAR (رسم)
+//==================== INSIDE BAR — رسم ====================
+input group "=== INSIDE BAR — رسم ==="
 // تشخیص در GOD_OF_HUNT_Core است (IBMaxAgeCandles)؛ اینها فقط رسم اند.
-// رنگ IB همان رنگ دسته تایم فریم است (ساختار/تریگر/ورود) تا وقتی سطوح چند
-// تایم فریم روی هم می‌افتند معلوم باشد هر خط مال کدام است — مثل الگوی AB.
-input int    IBLineCandles        = 5;       // طول خط ها بعد از کندل فرزند (بر حسب کندل)
-input bool   IBShowChildLines     = true;    // خطوط های و لوی کندل فرزند هم رسم شود
+input int    IBLineCandles        = 5;    // طول خط ها بعد از کندل فرزند (بر حسب کندل)
+input bool   IBShowChildLines     = true; // خطوط های و لوی کندل فرزند هم رسم شود
 
-//---- الگوی TICK FRACTAL (رسم)
-// تشخیص در GOD_OF_HUNT_Core است (Tick*)؛ این فقط رسم است.
+//==================== TICK FRACTAL — رسم و لاگ ====================
+input group "=== TICK FRACTAL — رسم و لاگ ==="
+// تشخیص در GOD_OF_HUNT_Core است (Tick*)؛ اینها فقط رسم و عیب یابی اند.
 input color  TickColor            = clrMagenta; // رنگ خط تیک
 input int    TickLineWidth        = 2;          // ضخامت خط تیک
+// لاگ: برای هر Inside Bar در محدوده اسکن می‌نویسد که چرا تیک نشد (یا شد)،
+// در تب Experts. برای وقتی که الگویی با چشم دیده می‌شود ولی رد شده است.
+input bool   TickDebugLog         = false; // نوشتن علت رد شدن کاندیدها در Experts
+input int    TickDebugBars        = 200;   // فقط این تعداد کندل آخر لاگ شود
 
-//---- لاگ تشخیصی TICK FRACTAL
-// برای هر Inside Bar در محدوده اسکن می‌نویسد که چرا تیک نشد (یا شد) در تب
-// Experts. برای وقتی که الگویی با چشم دیده می‌شود ولی اندیکاتور ردش کرده.
-// روی تایم فریم پایین لاگ زیاد می‌شود، پس TickDebugBars محدودش می‌کند.
-input bool   TickDebugLog         = false; // نوشتن علت رد شدن کاندیدهای تیک در Experts
-input int    TickDebugBars        = 200;   // فقط این تعداد کندل آخر بررسی شود
-
-//---- تایمر کندل
+//==================== نمایشگرهای چارت ====================
+input group "=== نمایشگرهای چارت (بی ربط به الگوها) ==="
 input bool   ShowCandleTimer      = true;      // نمایش زمان باقی مانده تا بسته شدن کندل
 input color  CandleTimerColor     = clrGray;   // رنگ تایمر
-
-//---- تایم فریم فراکتال
-// زیر تایمر نوشته می‌شود: بعد از هانت شدن B روی این تایم فریم، برای کندل
-// شکست و کندل سیگنال باید به این تایم فریم پایین تر رفت.
+// تایم فریم فراکتال زیر تایمر: بعد از هانت شدن B روی این تایم فریم، برای
+// کندل شکست و کندل سیگنال باید به این تایم فریم پایین تر رفت.
 input bool   ShowFractalTF        = true;         // نمایش تایم فریم فراکتال زیر تایمر
 input color  FractalTFColor       = clrSteelBlue; // رنگ تایم فریم فراکتال
-
-//---- سشن معاملاتی
-// زیر تایم فریم فراکتال نوشته می‌شود: کدام سشن ها باز اند و چقدر تا تغییر
-// بعدی مانده. مبنا ساعت GMT است نه ساعت سرور بروکر، چون ساعت سرور از بروکری
-// به بروکر دیگر فرق می‌کند ولی جدول سشن ها همه جا با GMT نوشته می‌شود.
+// سشن: کدام سشن ها باز اند و چقدر تا تغییر بعدی مانده. مبنا ساعت GMT است نه
+// ساعت سرور بروکر، چون ساعت سرور از بروکری به بروکر دیگر فرق می‌کند ولی
+// جدول سشن ها همه جا با GMT نوشته می‌شود.
 input bool   ShowSession          = true;          // نمایش سشن معاملاتی زیر تایمر
 input color  SessionColor         = clrDarkOrange; // رنگ سشن
-// ساعت باز و بسته شدن هر سشن به وقت GMT. اگر تقویم تابستانی جابجایشان کرد،
-// همین جا یک ساعت عقب/جلو ببرید.
+
+input group "=== ساعت سشن ها به وقت GMT ==="
+// اگر تقویم تابستانی جابجایشان کرد، همین جا یک ساعت عقب/جلو ببرید.
 input int    SydneyOpenGMT        = 21;
 input int    SydneyCloseGMT       = 6;
 input int    TokyoOpenGMT         = 0;
@@ -98,12 +99,9 @@ input int    LondonCloseGMT       = 16;
 input int    NewYorkOpenGMT       = 12;
 input int    NewYorkCloseGMT      = 21;
 
-//---- الگوهای باطل شده
-// الگوی مرده بی سروصدا حذف نمی‌شود؛ تا انتهای همان روز خاکستری روی چارت
-// می‌ماند و علت ابطالش کنار خط B نوشته می‌شود، تا بشود بررسی کرد که
-// اندیکاتور درست حذفش کرده یا نه.
-input bool   ShowDeadPatterns     = true;      // نمایش الگوهای باطل شده امروز
-input color  DeadPatternColor     = clrGray;   // رنگ الگوی باطل شده
+// الگوی مرده/منقضی بی سروصدا حذف نمی‌شود؛ تا انتهای همان روز خاکستری روی
+// چارت می‌ماند و علت ابطالش نوشته می‌شود، تا بشود بررسی کرد که اندیکاتور
+// درست حذفش کرده یا نه. ورودی هایش در دسته «عمومی» بالا هستند.
 
 //+------------------------------------------------------------------+
 enum TFCategory { STRUCTURE, TRIGGER, ENTRY, NONE };

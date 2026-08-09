@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                                     GOD_OF_HUNT_Scanner.mq5   v1.08   |
+//|                                     GOD_OF_HUNT_Scanner.mq5   v1.09   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
@@ -17,7 +17,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "1.08"
+#property version   "1.09"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
@@ -46,14 +46,16 @@ enum PanelFilterMode
    FILTER_ALL         // همه، شامل هانت شده ها
 };
 
-//---- دامنه اسکن
+// ورودی های خود اسکنر؛ هیچ کدام مخصوص یک الگو نیستند. تنظیمات تشخیص هر
+// الگو در GOD_OF_HUNT_Core.mqh است و بالای همین پنجره دیده می‌شود.
+input group "=== اسکنر — دامنه اسکن ==="
 input string ScanSymbols       = "XAUUSD,DJIUSD,BRNUSD,SPXUSD,NDXUSD,NZDJPY,USDCAD,USDCHF,USDJPY,GBPCHF,GBPJPY,GBPNZD,GBPUSD,EURJPY,EURNZD,EURUSD,GBPAUD,GBPCAD,CHFJPY,EURAUD,EURCAD,EURCHF,EURGBP,AUDCAD,AUDJPY,AUDUSD,CADCHF,CADJPY"; // نمادها با کاما؛ خالی یعنی همه Market Watch
 input bool   ScanAllMarketWatch = false; // اگر ScanSymbols خالی بود، همه Market Watch اسکن شود
 input string ScanTimeframes    = "H8,H4,H3,H2,H1,M30,M20,M15"; // تایم فریم ها با کاما
 input bool   SyncTFWithChart   = false;// به جای فهرست بالا، سه تایم فریم دکمه های چارت خوانده شود
 input int    RefreshSeconds    = 60;   // فاصله هر اسکن کامل (ثانیه)؛ شمارش معکوس در سربرگ دیده می‌شود
 
-//---- نوتیفیکیشن
+input group "=== اسکنر — نوتیفیکیشن ==="
 input bool   EnablePush        = true; // نوتیفیکیشن موبایل برای هر AB جدید قطعی شده
 input PanelFilterMode NotifyFilter = FILTER_ALL;       // برای کدام وضعیت ها اطلاع بدهد
 
@@ -66,7 +68,7 @@ enum ClickTargetMode
    CLICK_NEW_CHART       // یک چارت تازه باز شود
 };
 
-//---- جدول
+input group "=== اسکنر — جدول ==="
 input PanelFilterMode PanelFilter = FILTER_ALL;       // کدام وضعیت ها در جدول بیایند
 input PanelCornerMode PanelCorner = PANEL_TOP_RIGHT; // جدول در کدام گوشه باشد
 input int    PanelX            = 70;   // فاصله جدول از لبه انتخاب شده
@@ -86,7 +88,7 @@ input color  PanelBorderColor  = clrDimGray; // رنگ قاب جدول
 input int    PanelMaxRows      = 100;  // سقف ردیف؛ به هر حال از ارتفاع چارت بیشتر نمی‌شود
 input bool   GroupBySymbol     = true; // نمادی که در چند تایم فریم الگو دارد یک ردیف کشویی شود
 
-//---- کلیک روی ردیف
+input group "=== اسکنر — کلیک روی ردیف و همگام سازی ==="
 // کلیک روی یک ردیف عادی، چارت را به همان نماد و تایم فریم می‌برد.
 // کلیک روی سربرگ گروه (ردیفی که با + یا - شروع می‌شود) کار قبلی اش را
 // می‌کند و فقط تایم فریم های آن نماد را باز و بسته می‌کند؛ برای رفتن به

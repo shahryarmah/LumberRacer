@@ -21,6 +21,9 @@ def clean(text):
         s = line.strip()
         if s.startswith("#property") or s.startswith("#include"):
             continue
+        # input group "..."  فقط سربرگ پنجره تنظیمات است و متغیری نمی‌سازد
+        if re.match(r'^\s*input\s+group\b', line):
+            continue
         line = re.sub(r'^(\s*)input\s+', r'\1', line)
         line = re.sub(r'&(\w+)\[\]', r'\1[]', line)
         line = re.sub(r'(\w+)\[\]\s*;', r'\1[8192];', line)
