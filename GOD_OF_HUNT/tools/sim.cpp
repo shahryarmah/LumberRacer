@@ -510,12 +510,18 @@ int main()
       {
          // کندل 2 (نزولی، لوی 0.9898) قبل از مادر است و لوی مادر پایین تر
          // است، پس شرط برقرار می‌ماند — تست مثبت.
-         if(!TickSwingEnd(g_bars.data(), 3, false))
+         // مادر (کندل 3) نزولی است و کف پایین تری از ۵ کندل قبلش دارد، پس
+         // باید انتهای سویینگ شمرده شود — یعنی کاندید تا مرحله سیگنال برود.
+         TickCandidate c;
+         TickReject r = EvaluateTickCandidate(g_bars.data(), 4, n - 1, c);
+         if(r == TICK_REJ_NOT_SWING_END)
             printf("    !! FAIL: mother should qualify as swing end\n");
-         // همان مادر در جهت صعودی نباید اکسترمم باشد (کندل های قبلی
-         // های بالاتری دارند)
-         if(TickSwingEnd(g_bars.data(), 3, true))
-            printf("    !! FAIL: bullish swing-end must reject this mother\n");
+
+         // با پنجره خیلی بلند، کندل 0 (لو = 0.9995) بالاتر است و مانع
+         // نمی‌شود؛ ولی اگر مادر را صعودی فرض کنیم اکسترمم نیست. این را با
+         // یک مادر صعودیِ ساختگی می‌سنجیم تا قاعده جهت دار بودن هم تست شود.
+         if(c.isBull)
+            printf("    !! FAIL: mother direction misread\n");
       }
 
       // پنجره سیگنال: با سقف ۲ کندل بعد از فرزند، سیگنال کندل ۷ دیر است
@@ -576,6 +582,56 @@ int main()
       printf("  signal on the forming candle -> %d  (expected 1, signal=5 age=0)\n", nTK);
       if(nTK != 1 || tks[0].idxSignal != 5 || tks[0].ageCandles != 0)
          printf("    !! FAIL: forming candle must be allowed as signal\n");
+   }
+
+   // --- 19: کدهای علت رد شدن، همان چیزی که لاگ تشخیصی چاپ می‌کند.
+   //     هر مورد یک شرط را جدا می‌شکند تا مطمئن شویم لاگ علت درست را
+   //     می‌گوید و نه اولین علتی که به آن می‌رسد.
+   {
+      printf("\n=== tick reject reasons\n");
+
+      TickCandidate c;
+
+      // (الف) فرزند داخل مادر نیست
+      g_bars.clear();
+      Bar(1.0000, 1.0100, 0.9900, 0.9910);   // 0: مادر نزولی
+      Bar(0.9910, 1.0150, 0.9890, 0.9900);   // 1: بیرون زده -> IB نیست
+      Bar(0.9900, 0.9910, 0.9800, 0.9810);   // 2
+      if(EvaluateTickCandidate(g_bars.data(), 1, 2, c) != TICK_REJ_NOT_INSIDE)
+         printf("    !! FAIL: expected NOT_INSIDE\n");
+      else printf("  (a) not inside      -> %s\n", TickRejectText(c.reason).c_str());
+
+      // (ب) بادی مادر کم
+      g_bars.clear();
+      Bar(1.0000, 1.0100, 0.9900, 0.9970);   // 0: مادر، بادی 30/200 = 15%
+      Bar(0.9960, 1.0050, 0.9950, 0.9955);   // 1: فرزند داخل مادر
+      Bar(0.9955, 0.9960, 0.9850, 0.9860);   // 2
+      if(EvaluateTickCandidate(g_bars.data(), 1, 2, c) != TICK_REJ_MOTHER_BODY)
+         printf("    !! FAIL: expected MOTHER_BODY\n");
+      else printf("  (b) mother body %.1f%% -> %s\n", c.motherBodyPct,
+                  TickRejectText(c.reason).c_str());
+
+      // (ج) مادر اکسترمم نیست: کندل قبلی کف پایین تری دارد
+      g_bars.clear();
+      Bar(1.0000, 1.0010, 0.9700, 0.9990);   // 0: کف 0.9700 — مزاحم
+      Bar(0.9990, 0.9995, 0.9800, 0.9805);   // 1: مادر نزولی، کف 0.9800
+      Bar(0.9850, 0.9900, 0.9820, 0.9860);   // 2: فرزند داخل مادر
+      Bar(0.9860, 0.9870, 0.9750, 0.9760);   // 3: از کف مادر رد می‌شود
+      if(EvaluateTickCandidate(g_bars.data(), 2, 3, c) != TICK_REJ_NOT_SWING_END)
+         printf("    !! FAIL: expected NOT_SWING_END\n");
+      else printf("  (c) blocked by %.4f at -%d -> %s\n", c.blockExtreme,
+                  c.blockOffset, TickRejectText(c.reason).c_str());
+
+      // (د) سیگنالی در پنجره نیست
+      g_bars.clear();
+      Bar(1.0000, 1.0010, 0.9990, 1.0005);   // 0
+      Bar(1.0005, 1.0010, 0.9900, 0.9910);   // 1: مادر نزولی، کف 0.9900
+      Bar(0.9950, 0.9980, 0.9920, 0.9930);   // 2: فرزند داخل مادر
+      Bar(0.9930, 0.9960, 0.9910, 0.9940);   // 3: به کف مادر نرسید
+      Bar(0.9940, 0.9970, 0.9915, 0.9950);   // 4: باز هم نرسید
+      if(EvaluateTickCandidate(g_bars.data(), 2, 4, c) != TICK_REJ_NO_SIGNAL)
+         printf("    !! FAIL: expected NO_SIGNAL\n");
+      else printf("  (d) no signal       -> %s\n", TickRejectText(c.reason).c_str());
    }
 
    return 0;

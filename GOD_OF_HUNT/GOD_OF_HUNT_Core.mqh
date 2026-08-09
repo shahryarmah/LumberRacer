@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                                        GOD_OF_HUNT_Core.mqh   v1.07   |
+//|                                        GOD_OF_HUNT_Core.mqh   v1.08   |
 //|                                                                  |
 //| منطق مشترک تشخیص سویینگ و چرخه عمر الگوی ABCD.                   |
 //| هم GOD_OF_HUNT.mq5 (اندیکاتور چارت) و هم GOD_OF_HUNT_Scanner.mq5           |
@@ -1370,23 +1370,149 @@ struct TickFractal
    datetime deadTime;     // زمان کندلی که در آن منقضی شد (فقط وقتی expired)
 };
 
-// آیا مادر انتهای سویینگ است؟ تعریف ساده (به درخواست صاحب پروژه، به جای
-// قید «۳ کندل هم جهت + شارپ» نسخه های قبل): مادر باید در جهت خودش
-// افراطی ترین نقطه TickSwingLookback کندل قبلش باشد — سقف بالاتر از همه در
-// صعودی، کف پایین تر از همه در نزولی. تساوی رد نمی‌کند.
-bool TickSwingEnd(MqlRates &rates[], int idxMother, bool bull)
+//+------------------------------------------------------------------+
+// چرا یک کاندید تیک رد شد. برای لاگ تشخیصی، تا معلوم باشد الگویی که با چشم
+// دیده می‌شود دقیقا به کدام شرط خورده است.
+enum TickReject
 {
-   int from = idxMother - TickSwingLookback;
-   if(from < 0) from = 0;
-   if(from >= idxMother) return false;   // هیچ کندلی قبل از مادر نیست
+   TICK_OK = 0,
+   TICK_REJ_NOT_INSIDE,      // فرزند اکیدا داخل مادر نیست (اصلا IB نیست)
+   TICK_REJ_MOTHER_FLAT,     // مادر بی جهت است (رنج صفر یا اوپن == کلوز)
+   TICK_REJ_MOTHER_BODY,     // بادی مادر کمتر از TickMotherBodyPercent
+   TICK_REJ_NOT_SWING_END,   // مادر اکسترمم TickSwingLookback کندل قبلش نیست
+   TICK_REJ_NO_SIGNAL        // در پنجره مجاز، کندلی از های/لوی مادر رد نشد
+};
 
-   for(int k = from; k < idxMother; k++)
+string TickRejectText(TickReject r)
+{
+   switch(r)
    {
-      if(bull)  { if(rates[k].high > rates[idxMother].high) return false; }
-      else      { if(rates[k].low  < rates[idxMother].low)  return false; }
+      case TICK_OK:                return "OK";
+      case TICK_REJ_NOT_INSIDE:    return "child not strictly inside mother";
+      case TICK_REJ_MOTHER_FLAT:   return "mother has no direction";
+      case TICK_REJ_MOTHER_BODY:   return "mother body below threshold";
+      case TICK_REJ_NOT_SWING_END: return "mother is not the swing extreme";
+      case TICK_REJ_NO_SIGNAL:     return "no cross beyond mother in window";
+   }
+   return "";
+}
+
+// جزئیات یک کاندید، برای نوشتن در لاگ
+struct TickCandidate
+{
+   TickReject reason;
+   bool       isBull;
+   double     motherBodyPct;
+   double     motherExtreme;    // های مادر در صعودی، لوی آن در نزولی
+   double     blockExtreme;     // سقف/کف مزاحمی که نگذاشت مادر اکسترمم باشد
+   int        blockOffset;      // آن مزاحم چند کندل قبل از مادر است
+   int        idxSignal;        // -1 اگر سیگنالی پیدا نشد
+};
+
+// سنجش یک کاندید (فرزند = idxChild، مادر = idxChild-1) با همه شرط ها.
+//
+// تنها جای پیاده سازی این شرط هاست: هم CollectTickFractals از آن استفاده
+// می‌کند و هم لاگ تشخیصی. اگر لاگ کپی جدا داشت، دقیقا همان تله ای می‌شد که
+// اسکنر و اندیکاتور با ورودی های جدا داشتند — لاگ می‌گفت قبول و تشخیص
+// می‌گفت رد.
+TickReject EvaluateTickCandidate(MqlRates &rates[], int idxChild, int lastSignal,
+                                 TickCandidate &c)
+{
+   int mo = idxChild - 1;
+
+   c.reason        = TICK_OK;
+   c.isBull        = false;
+   c.motherBodyPct = 0.0;
+   c.motherExtreme = 0.0;
+   c.blockExtreme  = 0.0;
+   c.blockOffset   = 0;
+   c.idxSignal     = -1;
+
+   // --- شرط IB: فرزند اکیدا داخل مادر
+   if(!(rates[idxChild].high < rates[mo].high && rates[idxChild].low > rates[mo].low))
+   {
+      c.reason = TICK_REJ_NOT_INSIDE;
+      return c.reason;
    }
 
-   return true;
+   // --- جهت و بادی مادر
+   double range = rates[mo].high - rates[mo].low;
+   if(range <= 0.0 || rates[mo].close == rates[mo].open)
+   {
+      c.reason = TICK_REJ_MOTHER_FLAT;
+      return c.reason;
+   }
+
+   double body = MathAbs(rates[mo].close - rates[mo].open);
+   c.motherBodyPct = body / range * 100.0;
+   c.isBull        = (rates[mo].close > rates[mo].open);
+   c.motherExtreme = c.isBull ? rates[mo].high : rates[mo].low;
+
+   if(c.motherBodyPct < TickMotherBodyPercent)
+   {
+      c.reason = TICK_REJ_MOTHER_BODY;
+      return c.reason;
+   }
+
+   // --- مادر انتهای سویینگ: اکسترمم TickSwingLookback کندل قبلش
+   int from = mo - TickSwingLookback;
+   if(from < 0) from = 0;
+
+   if(from >= mo)
+   {
+      c.reason = TICK_REJ_NOT_SWING_END;   // هیچ کندلی قبل از مادر نیست
+      return c.reason;
+   }
+
+   for(int k = from; k < mo; k++)
+   {
+      bool blocks = c.isBull ? (rates[k].high > rates[mo].high)
+                             : (rates[k].low  < rates[mo].low);
+      if(!blocks) continue;
+
+      c.blockExtreme = c.isBull ? rates[k].high : rates[k].low;
+      c.blockOffset  = mo - k;
+      c.reason       = TICK_REJ_NOT_SWING_END;
+      return c.reason;
+   }
+
+   // --- کندل سیگنال: اولین کندلی که در جهت سویینگ از های/لوی مادر رد
+   //     می‌شود. کلوز لازم نیست — رد شدن سایه کافی است — و کندل در حال
+   //     تشکیل هم قبول است. حداکثر TickSignalMaxCandles کندل بعد از فرزند.
+   int sEnd = idxChild + TickSignalMaxCandles;
+   if(sEnd > lastSignal) sEnd = lastSignal;
+
+   for(int s = idxChild + 1; s <= sEnd; s++)
+   {
+      bool crossed = c.isBull ? (rates[s].high > rates[mo].high)
+                              : (rates[s].low  < rates[mo].low);
+      if(crossed) { c.idxSignal = s; break; }
+    }
+
+   if(c.idxSignal < 0)
+   {
+      c.reason = TICK_REJ_NO_SIGNAL;
+      return c.reason;
+   }
+
+   c.reason = TICK_OK;
+   return c.reason;
+}
+
+// اولین اندیس فرزندی که CollectTickFractals می‌سنجد، و آخرین سیگنال ممکن.
+// جدا شده تا لاگ تشخیصی دقیقا همان محدوده را بگردد.
+void TickScanRange(MqlRates &rates[], int rates_total, int &firstChild, int &lastSignal)
+{
+   int last = rates_total - 1;
+
+   lastSignal = last;
+
+   int firstSignal      = last - TickMaxAgeCandles;
+   int firstSignalToday = FirstCandleOfToday(rates, rates_total) - TickMaxAgeCandles - 1;
+   if(firstSignalToday < firstSignal) firstSignal = firstSignalToday;
+
+   firstChild = firstSignal - TickSignalMaxCandles;
+   if(firstChild < 1) firstChild = 1;
 }
 
 // همه Tick Fractal های «فعال» (سیگنال در TickMaxAgeCandles کندل آخر) به
@@ -1411,13 +1537,8 @@ int CollectTickFractals(MqlRates &rates[], int rates_total, TickFractal &out[])
    // که تا بسته شدن کندل حرکت می‌کند، خود نقطه سوم خط تیک است (p3)، چون
    // سایه ممکن است کشیده تر شود. همان قاعده ای که در چرخه عمر AB برای شکست
    // سطح B هم به کار رفته است.
-   int lastSignal  = rates_total - 1;
-   int firstSignal = last - TickMaxAgeCandles;
-   int firstSignalToday = FirstCandleOfToday(rates, rates_total) - TickMaxAgeCandles - 1;
-   if(firstSignalToday < firstSignal) firstSignal = firstSignalToday;
-
-   int firstChild = firstSignal - TickSignalMaxCandles;
-   if(firstChild < 1) firstChild = 1;
+   int firstChild = 0, lastSignal = 0;
+   TickScanRange(rates, rates_total, firstChild, lastSignal);
 
    ArrayResize(out, rates_total);
 
@@ -1425,37 +1546,11 @@ int CollectTickFractals(MqlRates &rates[], int rates_total, TickFractal &out[])
    {
       int mo = m - 1;
 
-      // --- شرط IB: فرزند اکیدا داخل مادر
-      if(!(rates[m].high < rates[mo].high && rates[m].low > rates[mo].low))
-         continue;
+      TickCandidate cand;
+      if(EvaluateTickCandidate(rates, m, lastSignal, cand) != TICK_OK) continue;
 
-      // --- جهت و بادی مادر
-      double range = rates[mo].high - rates[mo].low;
-      if(range <= 0.0) continue;
-
-      double body = MathAbs(rates[mo].close - rates[mo].open);
-      if(body / range * 100.0 < TickMotherBodyPercent) continue;
-
-      if(rates[mo].close == rates[mo].open) continue;
-      bool bull = (rates[mo].close > rates[mo].open);
-
-      // --- مادر انتهای سویینگ
-      if(!TickSwingEnd(rates, mo, bull)) continue;
-
-      // --- کندل سیگنال: اولین کندلی که در جهت سویینگ از های/لوی مادر رد
-      //     می‌شود. کلوز لازم نیست — رد شدن سایه کافی است — و کندل در حال
-      //     تشکیل هم قبول است. حداکثر TickSignalMaxCandles کندل بعد از فرزند.
-      int sEnd = m + TickSignalMaxCandles;
-      if(sEnd > lastSignal) sEnd = lastSignal;
-
-      int idxSignal = -1;
-      for(int s = m + 1; s <= sEnd; s++)
-      {
-         bool crossed = bull ? (rates[s].high > rates[mo].high)
-                             : (rates[s].low  < rates[mo].low);
-         if(crossed) { idxSignal = s; break; }
-      }
-      if(idxSignal < 0) continue;
+      bool bull      = cand.isBull;
+      int  idxSignal = cand.idxSignal;
 
       int  age     = last - idxSignal;
       bool expired = (age > TickMaxAgeCandles);

@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                                     GOD_OF_HUNT_Scanner.mq5   v1.07   |
+//|                                     GOD_OF_HUNT_Scanner.mq5   v1.08   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
@@ -17,7 +17,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "1.07"
+#property version   "1.08"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 

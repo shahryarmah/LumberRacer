@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
-//|                                            GOD_OF_HUNT.mq5   v1.07   |
+//|                                            GOD_OF_HUNT.mq5   v1.08   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "1.07"
+#property version   "1.08"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
@@ -63,6 +63,13 @@ input bool   IBShowChildLines     = true;    // خطوط های و لوی کند
 // تشخیص در GOD_OF_HUNT_Core است (Tick*)؛ این فقط رسم است.
 input color  TickColor            = clrMagenta; // رنگ خط تیک
 input int    TickLineWidth        = 2;          // ضخامت خط تیک
+
+//---- لاگ تشخیصی TICK FRACTAL
+// برای هر Inside Bar در محدوده اسکن می‌نویسد که چرا تیک نشد (یا شد) در تب
+// Experts. برای وقتی که الگویی با چشم دیده می‌شود ولی اندیکاتور ردش کرده.
+// روی تایم فریم پایین لاگ زیاد می‌شود، پس TickDebugBars محدودش می‌کند.
+input bool   TickDebugLog         = false; // نوشتن علت رد شدن کاندیدهای تیک در Experts
+input int    TickDebugBars        = 200;   // فقط این تعداد کندل آخر بررسی شود
 
 //---- تایمر کندل
 input bool   ShowCandleTimer      = true;      // نمایش زمان باقی مانده تا بسته شدن کندل
@@ -1148,6 +1155,61 @@ void DrawInsideBar(InsideBar &ib, TFCategory cat, ENUM_TIMEFRAMES tf, int tfSecs
 //+------------------------------------------------------------------+
 // هشدار لحظات کلیدی. فقط برای رویدادی که روی آخرین کندل بسته شده رخ داده،
 // بنابراین هر رویداد دقیقا یک بار هشدار می‌دهد.
+// لاگ تشخیصی: برای هر Inside Bar در محدوده اسکن، علت رد شدن یا قبول شدنش
+// به عنوان Tick Fractal نوشته می‌شود.
+//
+// عمدا از همان EvaluateTickCandidate هسته استفاده می‌کند که خود تشخیص هم
+// از آن استفاده می‌کند — نه یک کپی موازی، وگرنه ممکن بود لاگ چیزی بگوید و
+// تشخیص چیز دیگری بکند.
+void LogTickCandidates(ENUM_TIMEFRAMES tf, MqlRates &rates[], int rates_total)
+{
+   int firstChild = 0, lastSignal = 0;
+   TickScanRange(rates, rates_total, firstChild, lastSignal);
+
+   // سقف کاربر: فقط کندل های اخیر، وگرنه روی تایم پایین لاگ پر می‌شود
+   int limitFrom = rates_total - TickDebugBars;
+   if(limitFrom > firstChild) firstChild = limitFrom;
+   if(firstChild < 1) firstChild = 1;
+
+   Print("--- GOD_OF_HUNT tick log  ", _Symbol, " ", TFToStr(tf),
+         "  (body>=", DoubleToString(TickMotherBodyPercent, 1),
+         "%  lookback=", TickSwingLookback,
+         "  signal<=", TickSignalMaxCandles, " bars)");
+
+   int shown = 0;
+
+   for(int m = firstChild; m <= lastSignal - 1; m++)
+   {
+      TickCandidate c;
+      TickReject r = EvaluateTickCandidate(rates, m, lastSignal, c);
+
+      // کاندیدی که اصلا Inside Bar نیست ارزش نوشتن ندارد
+      if(r == TICK_REJ_NOT_INSIDE) continue;
+
+      shown++;
+
+      string line = "IB child " + TimeToString(rates[m].time, TIME_DATE | TIME_MINUTES) +
+                    "  mother " + TimeToString(rates[m-1].time, TIME_DATE | TIME_MINUTES) +
+                    "  " + (c.isBull ? "BULL" : "BEAR") +
+                    "  body " + DoubleToString(c.motherBodyPct, 1) + "%" +
+                    "  -> " + TickRejectText(r);
+
+      if(r == TICK_REJ_NOT_SWING_END && c.blockOffset > 0)
+         line += "  (mother " + DoubleToString(c.motherExtreme, _Digits) +
+                 ", blocked by " + DoubleToString(c.blockExtreme, _Digits) +
+                 " at -" + IntegerToString(c.blockOffset) + " bars)";
+
+      if(r == TICK_OK)
+         line += "  signal " + TimeToString(rates[c.idxSignal].time, TIME_DATE | TIME_MINUTES);
+
+      Print(line);
+   }
+
+   if(shown == 0)
+      Print("(no inside bar in the scanned range)");
+}
+
+//+------------------------------------------------------------------+
 void DrawTickFractal(TickFractal &tk, TFCategory cat, ENUM_TIMEFRAMES tf)
 {
    // دو پاره خط مادر→فرزند→سیگنال. در سویینگ نزولی از لوها و در صعودی از
@@ -1323,6 +1385,20 @@ void ProcessIndicator()
          if(EnableAlerts && tks[k].ageCandles == 1)
             Alert("GOD_OF_HUNT ", _Symbol, " ", TFToStr(tf),
                   ": Tick Fractal ", tks[k].isBull ? "BULL" : "BEAR");
+      }
+
+      // لاگ تشخیصی، فقط در بازترسیم کامل تا هر ثانیه تکرار نشود.
+      // وقتی AB خاموش است rates پر نشده، پس اینجا جدا کپی می‌شود.
+      if(tkOn && TickDebugLog)
+      {
+         if(abOn) LogTickCandidates(tf, rates, rates_total);
+         else
+         {
+            MqlRates dbg[];
+            ArraySetAsSeries(dbg, false);
+            int nDbg = CopyRates(_Symbol, tf, 0, ABCDHistoryBars, dbg);
+            if(nDbg > 3) LogTickCandidates(tf, dbg, nDbg);
+         }
       }
    }
 

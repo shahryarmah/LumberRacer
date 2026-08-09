@@ -104,9 +104,13 @@ static datetime TimeGMT()     { return 0; }
 static void     TimeToStruct(datetime, MqlDateTime &d) { memset(&d, 0, sizeof(d)); }
 static ulong    GetMicrosecondCount() { return 0; }
 
+enum { TIME_DATE = 1, TIME_MINUTES = 2, TIME_SECONDS = 4 };
+static string TimeToString(datetime, int = 0) { return ""; }
+
 static bool EventSetTimer(int) { return true; }
 static void EventKillTimer()   {}
 template<typename... A> void Alert(A...) {}
+template<typename... A> void Print(A...) {}
 static bool SendNotification(const string &) { return true; }
 
 static int  Bars(const string &, int) { return 0; }
