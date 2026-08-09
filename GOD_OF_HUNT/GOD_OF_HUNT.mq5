@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
-//|                                            GOD_OF_HUNT.mq5   v1.09   |
+//|                                            GOD_OF_HUNT.mq5   v1.10   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "1.09"
+#property version   "1.10"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
@@ -67,7 +67,8 @@ input bool   IBShowChildLines     = true; // خطوط های و لوی کندل 
 //==================== TICK FRACTAL — رسم و لاگ ====================
 input group "=== TICK FRACTAL — رسم و لاگ ==="
 // تشخیص در GOD_OF_HUNT_Core است (Tick*)؛ اینها فقط رسم و عیب یابی اند.
-input color  TickColor            = clrMagenta; // رنگ خط تیک
+// رنگ خط تیک هم مثل AB و INSIDE BAR رنگ دسته تایم فریم است، پس ورودی رنگ
+// جدا ندارد: رنگ می‌گوید کدام تایم فریم، شکل می‌گوید کدام الگو.
 input int    TickLineWidth        = 2;          // ضخامت خط تیک
 // لاگ: برای هر Inside Bar در محدوده اسکن می‌نویسد که چرا تیک نشد (یا شد)،
 // در تب Experts. برای وقتی که الگویی با چشم دیده می‌شود ولی رد شده است.
@@ -1208,11 +1209,12 @@ void LogTickCandidates(ENUM_TIMEFRAMES tf, MqlRates &rates[], int rates_total)
 }
 
 //+------------------------------------------------------------------+
-void DrawTickFractal(TickFractal &tk, TFCategory cat, ENUM_TIMEFRAMES tf)
+void DrawTickFractal(TickFractal &tk, TFCategory cat, ENUM_TIMEFRAMES tf,
+                     color catColor)
 {
    // دو پاره خط مادر→فرزند→سیگنال. در سویینگ نزولی از لوها و در صعودی از
    // های ها — همان شکلی که اسم الگو از آن می‌آید.
-   color drawColor = tk.expired ? DeadPatternColor : TickColor;
+   color drawColor = tk.expired ? DeadPatternColor : catColor;
 
    string base = GetTFPrefix(cat, tf) + "TK" + IntegerToString((long)tk.timeSignal);
 
@@ -1378,7 +1380,7 @@ void ProcessIndicator()
 
       for(int k = 0; k < nTK; k++)
       {
-         DrawTickFractal(tks[k], cat, tf);
+         DrawTickFractal(tks[k], cat, tf, drawColor);
 
          if(EnableAlerts && tks[k].ageCandles == 1)
             Alert("GOD_OF_HUNT ", _Symbol, " ", TFToStr(tf),

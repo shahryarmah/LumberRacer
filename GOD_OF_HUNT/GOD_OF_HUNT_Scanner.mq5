@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                                     GOD_OF_HUNT_Scanner.mq5   v1.09   |
+//|                                     GOD_OF_HUNT_Scanner.mq5   v1.10   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
@@ -17,7 +17,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "1.09"
+#property version   "1.10"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
@@ -69,6 +69,13 @@ enum ClickTargetMode
 };
 
 input group "=== اسکنر — جدول ==="
+// الگوی باطل/منقضی (خاکستری) در جدول بیاید یا نه.
+//
+// روی چارت خاکستری ماندن مفید است — می‌شود بررسی کرد که درست کنار گذاشته
+// شده — ولی در جدول فقط شلوغی می‌سازد، چون IB و TICK خیلی متراکم تر از AB
+// هستند و تا آخر روز جمع می‌شوند. این ورودی فقط جدول را کنترل می‌کند؛
+// نمایش خاکستری روی چارت با ShowDeadPatterns در خود اندیکاتور است.
+input bool   ShowDeadInPanel   = false; // ردیف خاکستری (باطل/منقضی) در جدول
 input PanelFilterMode PanelFilter = FILTER_ALL;       // کدام وضعیت ها در جدول بیایند
 input PanelCornerMode PanelCorner = PANEL_TOP_RIGHT; // جدول در کدام گوشه باشد
 input int    PanelX            = 70;   // فاصله جدول از لبه انتخاب شده
@@ -1053,6 +1060,10 @@ void BuildPanelRows()
       panelRowCount++;
    }
 
+   // ردیف های «از لیست افتاده» هم خاکستری اند، پس با همان ورودی کنترل
+   // می‌شوند تا جدول یک رفتار یکدست داشته باشد.
+   if(!ShowDeadInPanel) return;
+
    for(int g = 0; g < goneCount; g++)
    {
       // ردیف خاکستری الگویی که بعدا تیکش برداشته شده هم نمایش داده نمی‌شود
@@ -1441,6 +1452,10 @@ void RunScan()
 
    for(int i = 0; i < nRows; i++)
    {
+      // الگوی باطل/منقضی: روی چارت خاکستری می‌ماند، ولی در جدول فقط اگر
+      // ShowDeadInPanel روشن باشد
+      if(!ShowDeadInPanel && rows[i].dead != AB_ALIVE) continue;
+
       if(!PassesFilter(rows[i].rank, PanelFilter)) continue;
       live[nLive] = rows[i];
       nLive++;
