@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
-//|                                            GOD_OF_HUNT.mq5   v1.10   |
+//|                                            GOD_OF_HUNT.mq5   v1.11   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "1.10"
+#property version   "1.11"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
@@ -44,7 +44,7 @@ input group "=== AB HUNT — رسم ==="
 input color  LabelColor           = clrBlack; // رنگ لیبل های A و B و C
 input int    LineBLength          = 10;   // طول خط ادامه از B (بر حسب کندل)
 input int    LineMidLength        = 15;   // طول خط میانی (بر حسب کندل)
-input int    LabelShiftCandles    = 1;    // تعداد کندل شیفت لیبل ها
+input int    LabelShiftCandles    = 0;    // شیفت افقی لیبل A و B (0 = دقیقا روی کندل خودش)
 input bool   Show20PercentLine    = true;  // رسم خط حداقل اصلاح (20 درصد)
 input bool   ShowMaxRetraceLine   = true;  // رسم خط حداکثر اصلاح (60 درصد)
 input bool   ShowStateLabel       = true;  // نمایش وضعیت الگو کنار خط B
@@ -982,14 +982,27 @@ void DrawSwing(SwingAB &s, TFCategory cat, ENUM_TIMEFRAMES tf, color drawColor, 
    ObjectSetInteger(0, lineName, OBJPROP_STYLE, s.live ? STYLE_DASH : STYLE_SOLID);
 
    // --- لیبل های A و B
+   //
+   // لیبل دقیقا روی کندل خودش می‌نشیند و با انکر بیرون از کندل می‌افتد، نه
+   // با جابجایی افقی. قبلا A یک کندل به راست و B یک کندل به چپ شیفت
+   // می‌خوردند و انکر هم نداشتند (پیش فرض چپ-بالا، یعنی متن پایین-راستِ
+   // نقطه)، پس حرف A هیچ وقت روی کندل A نبود و موقع مقایسه چشمی به نظر
+   // می‌رسید نقطه A اشتباه انتخاب شده. همان دامی که LESSONS.md بند ۶
+   // ثبتش کرده. LabelShiftCandles حالا پیش فرض صفر است و فقط اگر کسی
+   // عمدا بخواهد لیبل ها را کنار بزند به کار می‌آید.
+   //
+   // انکر: در لگ صعودی A روی کف است پس متن زیر آن، و B روی سقف است پس متن
+   // بالای آن. در لگ نزولی برعکس. همان قاعده ای که لیبل C از قبل داشت.
    if(ObjectFind(0, labelA) >= 0) ObjectDelete(0, labelA);
    ObjectCreate(0, labelA, OBJ_TEXT, 0, s.timeADraw + tfSecs * LabelShiftCandles, s.priceADraw);
    ObjectSetInteger(0, labelA, OBJPROP_COLOR, LabelColor);
+   ObjectSetInteger(0, labelA, OBJPROP_ANCHOR, s.isBull ? ANCHOR_UPPER : ANCHOR_LOWER);
    ObjectSetString(0, labelA, OBJPROP_TEXT, "A");
 
    if(ObjectFind(0, labelB) >= 0) ObjectDelete(0, labelB);
    ObjectCreate(0, labelB, OBJ_TEXT, 0, s.timeB - tfSecs * LabelShiftCandles, s.priceB);
    ObjectSetInteger(0, labelB, OBJPROP_COLOR, LabelColor);
+   ObjectSetInteger(0, labelB, OBJPROP_ANCHOR, s.isBull ? ANCHOR_LOWER : ANCHOR_UPPER);
    ObjectSetString(0, labelB, OBJPROP_TEXT, "B");
 
    // --- خط B (محدوده نقدینگی). تا وقتی الگو فعال است تا کندل جاری ادامه پیدا می‌کند.
