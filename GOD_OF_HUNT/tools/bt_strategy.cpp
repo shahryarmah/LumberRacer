@@ -77,6 +77,16 @@ struct Trade
    bool      tp2AfterStop = false;
 };
 
+// همه معامله های انجام شده، برای تحلیل ریسک به ریوارد در انتها
+struct TradeRec
+{
+   const char *pair;
+   int         leg;
+   Trade       tr;
+   double      risk, rr1, rr2;
+};
+static std::vector<TradeRec> g_all;
+
 struct Setup
 {
    long long keyA = 0;
@@ -314,6 +324,16 @@ static Trade RunLegTrade(const std::vector<MqlRates> &lo, int loTF,
 }
 
 //--------------------------------------------------------------------------
+static void RecordTrade(const char *pair, int leg, const Trade &tr)
+{
+   TradeRec r;
+   r.pair = pair; r.leg = leg; r.tr = tr;
+   r.risk = MathAbs(tr.entry - tr.stop);
+   r.rr1  = (r.risk > 0) ? MathAbs(tr.tp1 - tr.entry) / r.risk : 0.0;
+   r.rr2  = (r.risk > 0) ? MathAbs(tr.tp2 - tr.entry) / r.risk : 0.0;
+   g_all.push_back(r);
+}
+
 struct Stats
 {
    int n = 0, win1 = 0, win2 = 0, loss = 0, open = 0;
@@ -373,6 +393,7 @@ static void Report(const char *title,
                              false, 0, false,
                              st.hiB);             // TP2 = سطح B تایم بالا
          if(st.t1.entered) s1.add(st.t1); else miss1[st.t1.miss]++;
+         if(st.t1.entered) RecordTrade(title, 1, st.t1);
       }
 
       if(st.tHunt > 0)
@@ -384,6 +405,7 @@ static void Report(const char *title,
                              true, st.hiB, st.isBull,  // B تایم پایین آن طرف B تایم بالا
                              st.hiC);             // TP2 = نقطه C تایم بالا
          if(st.t2.entered) s2.add(st.t2); else miss2[st.t2.miss]++;
+         if(st.t2.entered) RecordTrade(title, 2, st.t2);
       }
    }
 
@@ -514,6 +536,108 @@ static void Report(const char *title,
    }
 }
 
+//--------------------------------------------------------------------------
+// تحلیل ریسک به ریوارد: نسبت فاصله تارگت به فاصله استاپ، و اینکه برایند
+// روی هر بازه از این نسبت مثبت بوده یا منفی.
+static void RRAnalysis()
+{
+   if(g_all.empty()) { printf("\nمعامله ای برای تحلیل نیست\n"); return; }
+
+   printf("\n\n================================================================\n");
+   printf(" تحلیل ریسک به ریوارد — همه معامله ها (%d)\n", (int)g_all.size());
+   printf("================================================================\n");
+
+   printf("\n--- فهرست: فاصله ها و نسبت ها\n");
+   printf("  %-16s %-4s %-5s %8s %8s %8s %7s %7s %8s\n",
+          "زمان ورود", "پر", "جهت", "ریسک", "تا TP1", "تا TP2", "RR1", "RR2", "نتیجه");
+
+   double sumRisk = 0, sumRR1 = 0, sumRR2 = 0;
+
+   for(size_t i = 0; i < g_all.size(); i++)
+   {
+      const TradeRec &r = g_all[i];
+      const Trade &t = r.tr;
+      const char *res = t.stopped ? "استاپ" : t.hitTP2 ? "TP2" : t.hitTP1 ? "TP1" : "باز";
+
+      printf("  %-16s  %d   %-5s %8.2f %8.2f %8.2f %7.2f %7.2f %8s\n",
+             Stamp(t.tEntry).c_str(), r.leg, t.isLong ? "خرید" : "فروش",
+             r.risk, MathAbs(t.tp1 - t.entry), MathAbs(t.tp2 - t.entry),
+             r.rr1, r.rr2, res);
+
+      sumRisk += r.risk; sumRR1 += r.rr1; sumRR2 += r.rr2;
+   }
+
+   int n = (int)g_all.size();
+   printf("\n  میانگین: ریسک %.2f   RR1 %.2f   RR2 %.2f\n",
+          sumRisk / n, sumRR1 / n, sumRR2 / n);
+
+   // میانه RR2
+   std::vector<double> v;
+   for(size_t i = 0; i < g_all.size(); i++) v.push_back(g_all[i].rr2);
+   std::sort(v.begin(), v.end());
+   printf("  میانه RR2: %.2f   |   کمترین %.2f   بیشترین %.2f\n",
+          v[n / 2], v.front(), v.back());
+
+   // --- برایند به تفکیک بازه RR2
+   printf("\n--- برایند به تفکیک نسبت ریسک به ریوارد (تارگت دوم)\n");
+   printf("  %-12s %6s %6s %8s %10s %10s\n",
+          "بازه RR2", "تعداد", "برد", "نرخ برد", "R (TP2)", "R (TP1)");
+
+   double edges[] = { 0.0, 1.0, 2.0, 3.0, 5.0, 1e9 };
+   const char *names[] = { "زیر 1", "1 تا 2", "2 تا 3", "3 تا 5", "بالای 5" };
+
+   for(int b = 0; b < 5; b++)
+   {
+      int cnt = 0, win = 0;
+      double r2 = 0, r1 = 0;
+
+      for(size_t i = 0; i < g_all.size(); i++)
+      {
+         const TradeRec &r = g_all[i];
+         if(r.rr2 < edges[b] || r.rr2 >= edges[b + 1]) continue;
+         cnt++;
+         if(r.tr.hitTP2) win++;
+         r2 += r.tr.rTP2; r1 += r.tr.rTP1;
+      }
+
+      if(cnt == 0) continue;
+      printf("  %-12s %6d %6d %7.0f%% %+10.2f %+10.2f\n",
+             names[b], cnt, win, 100.0 * win / cnt, r2, r1);
+   }
+
+   // --- اگر فقط معامله هایی با حداقل RR مشخص گرفته می‌شد
+   printf("\n--- اگر فقط معامله های با RR2 بالای حد مشخص گرفته می‌شد\n");
+   printf("  %-10s %6s %6s %8s %10s %12s\n",
+          "حداقل RR2", "تعداد", "برد", "نرخ برد", "R کل", "R هر معامله");
+
+   double mins[] = { 0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 5.0 };
+   for(int m = 0; m < 7; m++)
+   {
+      int cnt = 0, win = 0;
+      double tot = 0;
+
+      for(size_t i = 0; i < g_all.size(); i++)
+      {
+         if(g_all[i].rr2 < mins[m]) continue;
+         cnt++;
+         if(g_all[i].tr.hitTP2) win++;
+         tot += g_all[i].tr.rTP2;
+      }
+
+      if(cnt == 0) continue;
+      printf("  >= %-7.1f %6d %6d %7.0f%% %+10.2f %+12.2f\n",
+             mins[m], cnt, win, 100.0 * win / cnt, tot, tot / cnt);
+   }
+
+   // --- سربه سر لازم: با این RR میانگین، چه نرخ بردی لازم بود؟
+   printf("\n--- نرخ برد لازم برای سربه سر\n");
+   double avgRR2 = sumRR2 / n;
+   int wins2 = 0;
+   for(size_t i = 0; i < g_all.size(); i++) if(g_all[i].tr.hitTP2) wins2++;
+   printf("  با RR2 میانگین %.2f، نرخ برد لازم %.0f%% است؛ نرخ برد واقعی %.0f%%\n",
+          avgRR2, 100.0 / (1.0 + avgRR2), 100.0 * wins2 / n);
+}
+
 int main()
 {
    printf("بک تست سیستم دو معامله ای فراکتالی — XAUUSD\n");
@@ -526,5 +650,6 @@ int main()
    Report("H4  <->  M15", "data/GOH_XAUUSD_H4.csv", PERIOD_H4,
           "data/GOH_XAUUSD_M15.csv", PERIOD_M15);
 
+   RRAnalysis();
    return 0;
 }
