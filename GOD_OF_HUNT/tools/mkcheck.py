@@ -63,11 +63,19 @@ def clean(text):
 
 
 def check(mq5_name):
-    src = ROOT / mq5_name
-    body = ('#include "' + str(HERE / "mql5_stub.h") + '"\n' +
-            clean(CORE.read_text(encoding="utf-8")) + "\n" +
-            clean(src.read_text(encoding="utf-8")) + "\n" +
-            "int main() { return 0; }\n")
+    # اسکریپت های داخل tools هسته را اینکلود نمی‌کنند
+    src = HERE / mq5_name
+    with_core = True
+    if not src.exists():
+        src = ROOT / mq5_name
+    else:
+        with_core = False
+
+    body = '#include "' + str(HERE / "mql5_stub.h") + '"\n'
+    if with_core:
+        body += clean(CORE.read_text(encoding="utf-8")) + "\n"
+    body += (clean(src.read_text(encoding="utf-8")) + "\n" +
+             "int main() { return 0; }\n")
 
     with tempfile.NamedTemporaryFile("w", suffix=".cpp", delete=False,
                                      encoding="utf-8") as f:

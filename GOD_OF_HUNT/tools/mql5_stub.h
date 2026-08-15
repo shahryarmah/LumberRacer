@@ -116,6 +116,16 @@ static bool SendNotification(const string &) { return true; }
 static int  Bars(const string &, int) { return 0; }
 template<typename T> int CopyRates(const string &, int, int, int, T *) { return 0; }
 
+// فایل — برای اسکریپت استخراج تاریخچه (ExportRates.mq5)
+enum { INVALID_HANDLE = -1, FILE_WRITE = 2, FILE_READ = 1, FILE_CSV = 8,
+       FILE_ANSI = 32, FILE_COMMON = 4096 };
+static int  FileOpen(const string &, int, unsigned short = 0) { return -1; }
+template<typename... A> unsigned int FileWrite(int, A...) { return 0; }
+static void FileClose(int) {}
+static int  GetLastError() { return 0; }
+static long SymbolInfoInteger(const string &, int) { return 0; }
+enum { SYMBOL_DIGITS = 0 };
+
 static int    SymbolsTotal(bool)           { return 0; }
 static string SymbolName(int, bool)        { return ""; }
 static bool   SymbolSelect(const string &, bool) { return true; }
