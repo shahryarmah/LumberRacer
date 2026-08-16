@@ -584,6 +584,45 @@ int main()
          printf("    !! FAIL: forming candle must be allowed as signal\n");
    }
 
+   // --- 20: حالت بک تست — کلیدهای ScanAllHistory و KeepAllDeadPatterns.
+   //     در حالت عادی فقط الگوهای پنجره سن و روز جاری برمی‌گردند؛ با این دو
+   //     کلید باید همه الگوهای کل سری برگردند.
+   {
+      g_bars.clear();
+      g_barSeconds = 14400;          // H4 -> شش کندل در روز
+      g_simTF      = PERIOD_H4;
+
+      // ده جفت مادر/فرزند پشت سر هم، پخش شده روی چند روز
+      double px = 1.0000;
+      for(int r = 0; r < 10; r++)
+      {
+         Bar(px, px + 0.0100, px - 0.0100, px + 0.0060);      // مادر
+         Bar(px + 0.0020, px + 0.0060, px - 0.0050, px + 0.0030); // فرزند داخل مادر
+         Bar(px + 0.0030, px + 0.0090, px - 0.0020, px + 0.0040); // فاصله
+         px += 0.0040;
+      }
+      Bar(px, px + 0.0010, px - 0.0010, px);   // کندل جاری
+
+      int n = (int)g_bars.size();
+      static InsideBar ibs[8192];
+
+      printf("\n=== backtest switches   (%d bars, %d days)\n", n,
+             (int)((g_bars.back().time - g_bars.front().time) / 86400) + 1);
+
+      int normal = CollectInsideBars(g_bars.data(), n, ibs);
+      printf("  حالت عادی                  -> %d\n", normal);
+
+      ScanAllHistory = true; KeepAllDeadPatterns = true;
+      int all = CollectInsideBars(g_bars.data(), n, ibs);
+      ScanAllHistory = false; KeepAllDeadPatterns = false;
+      printf("  ScanAllHistory + KeepAllDead -> %d  (باید 10 و بیشتر از عادی باشد)\n", all);
+
+      if(all != 10)
+         printf("    !! FAIL: backtest mode must return every inside bar\n");
+      if(!(all > normal))
+         printf("    !! FAIL: backtest mode must widen the result\n");
+   }
+
    // --- 19: کدهای علت رد شدن، همان چیزی که لاگ تشخیصی چاپ می‌کند.
    //     هر مورد یک شرط را جدا می‌شکند تا مطمئن شویم لاگ علت درست را
    //     می‌گوید و نه اولین علتی که به آن می‌رسد.

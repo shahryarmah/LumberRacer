@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
-//|                                            GOD_OF_HUNT_BT.mq5   v1.01   |
+//|                                            GOD_OF_HUNT_BT.mq5   v1.02   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "1.01"
+#property version   "1.02"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
@@ -1405,8 +1405,13 @@ void ProcessIndicator()
 
    if(abOn)
    {
+      // keepOnlyLast عمدا false است.
+      //
+      // در نسخه زنده تایم ورود فقط آخرین AB را نگه می‌دارد تا چارت شلوغ
+      // نشود، ولی در بک تست همان قاعده یعنی از کل بازه فقط یک الگو رسم
+      // شود. اینجا هر سه دسته همه الگوهای بازه را نشان می‌دهند.
       nKept = AnalyzeSymbolRange(_Symbol, tf, btFrom, btTo, maxLookback,
-                                 (cat == ENTRY), ShowPreviousABs,
+                                 false, ShowPreviousABs,
                                  rates, rates_total, kept);
       btLoadBars = rates_total;
       if(nKept < 0) { btLoadBars = 0; UpdateBtInfo(); return; }

@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                                        GOD_OF_HUNT_Core.mqh   v1.12   |
+//|                                        GOD_OF_HUNT_Core.mqh   v1.13   |
 //|                                                                  |
 //| منطق مشترک تشخیص سویینگ و چرخه عمر الگوی ABCD.                   |
 //| هم GOD_OF_HUNT.mq5 (اندیکاتور چارت) و هم GOD_OF_HUNT_Scanner.mq5           |
@@ -1352,8 +1352,10 @@ int CollectInsideBars(MqlRates &rates[], int rates_total, InsideBar &out[])
          if(idxExp > last) idxExp = last;
          deadTime = rates[idxExp].time;
 
-         // منقضی شده روزهای قبل دیگر نمایش داده نمی‌شود
-         if((long)deadTime / 86400 != dayNow) continue;
+         // منقضی شده روزهای قبل دیگر نمایش داده نمی‌شود.
+         // در حالت بک تست این قید برداشته می‌شود، وگرنه از کل بازه فقط
+         // الگوهای آخرین روز باقی می‌مانند.
+         if(!KeepAllDeadPatterns && (long)deadTime / 86400 != dayNow) continue;
       }
 
       out[cnt].idxMother  = mo;
@@ -1624,8 +1626,8 @@ int CollectTickFractals(MqlRates &rates[], int rates_total, TickFractal &out[])
          if(idxExp > last) idxExp = last;
          deadTime = rates[idxExp].time;
 
-         // منقضی شده روزهای قبل دیگر نمایش داده نمی‌شود
-         if((long)deadTime / 86400 != dayNow) continue;
+         // همان قاعده IB: در حالت بک تست قید «فقط امروز» برداشته می‌شود
+         if(!KeepAllDeadPatterns && (long)deadTime / 86400 != dayNow) continue;
       }
 
       out[cnt].idxMother  = mo;
