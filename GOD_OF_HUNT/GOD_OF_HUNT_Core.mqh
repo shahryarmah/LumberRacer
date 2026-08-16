@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                                        GOD_OF_HUNT_Core.mqh   v1.10   |
+//|                                        GOD_OF_HUNT_Core.mqh   v1.11   |
 //|                                                                  |
 //| منطق مشترک تشخیص سویینگ و چرخه عمر الگوی ABCD.                   |
 //| هم GOD_OF_HUNT.mq5 (اندیکاتور چارت) و هم GOD_OF_HUNT_Scanner.mq5           |
@@ -150,6 +150,21 @@ int ClampIdx(int idx, int size)
    if(idx >= size) return size - 1;
    return idx;
 }
+
+//+------------------------------------------------------------------+
+// کلیدهای حالت بک تست.
+//
+// اینها ورودی نیستند، متغیر سراسری اند: فقط نسخه بک تست
+// (GOD_OF_HUNT_BT.mq5) در OnInit روشنشان می‌کند. اندیکاتور زنده و اسکنر
+// هیچ وقت دستشان نمی‌زنند، پس رفتار آنها ذره ای عوض نمی‌شود و اثر انگشت
+// تنظیمات هم دست نخورده می‌ماند.
+//
+//   KeepAllDeadPatterns — الگوی مرده صرف نظر از تاریخ نگه داشته شود
+//                         (در حالت عادی فقط تا انتهای روزِ مرگش می‌ماند)
+//   ScanAllHistory      — INSIDE BAR و TICK در کل تاریخچه گشته شوند
+//                         (در حالت عادی فقط پنجره سن و روز جاری)
+bool KeepAllDeadPatterns = false;
+bool ScanAllHistory      = false;
 
 //+------------------------------------------------------------------+
 // الگوهای قابل انتخاب. هر الگو در هر دو اندیکاتور یک دکمه تیک دارد:
@@ -1119,7 +1134,8 @@ int BuildActiveSwings(MqlRates &rates[], int rates_total, double avgRange,
          EvaluateLifecycle(raw[k], rates, rates_total, avgRange, tf);
 
          if(raw[k].state == AB_INVALID || raw[k].state == AB_DONE)
-            if(!DeadStillVisible(raw[k], rates, rates_total)) continue;
+            if(!KeepAllDeadPatterns && !DeadStillVisible(raw[k], rates, rates_total))
+               continue;
 
          out[nKept] = raw[k];
          nKept++;
@@ -1282,6 +1298,7 @@ int CollectInsideBars(MqlRates &rates[], int rates_total, InsideBar &out[])
    int firstChild = last - IBMaxAgeCandles;              // سن = last - idxChild
    int firstChildToday = FirstCandleOfToday(rates, rates_total) - IBMaxAgeCandles - 1;
    if(firstChildToday < firstChild) firstChild = firstChildToday;
+   if(ScanAllHistory) firstChild = 1;      // حالت بک تست: کل تاریخچه
    if(firstChild < 1) firstChild = 1;
 
    ArrayResize(out, lastChild - firstChild + 1);
@@ -1524,6 +1541,7 @@ void TickScanRange(MqlRates &rates[], int rates_total, int &firstChild, int &las
    if(firstSignalToday < firstSignal) firstSignal = firstSignalToday;
 
    firstChild = firstSignal - TickSignalMaxCandles;
+   if(ScanAllHistory) firstChild = 1;      // حالت بک تست: کل تاریخچه
    if(firstChild < 1) firstChild = 1;
 }
 

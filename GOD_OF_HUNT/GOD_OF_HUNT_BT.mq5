@@ -1,14 +1,25 @@
 //+------------------------------------------------------------------+
-//|                                            GOD_OF_HUNT.mq5   v1.11   |
+//|                                            GOD_OF_HUNT_BT.mq5   v1.00   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "1.11"
+#property version   "1.00"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
+// نسخه بک تست.
+//
+// دقیقا همان اندیکاتور اصلی است، با سه تفاوت:
+//   ۱. فقط الگوهایی رسم می‌شوند که در بازه تاریخی انتخاب شده باشند
+//   ۲. الگوی مرده خاکستری نمی‌شود؛ همه با رنگ دسته تایم فریم خودشان
+//   ۳. تاریخچه عمیق تر گشته می‌شود تا الگوهای قدیمی هم پیدا شوند
+//
+// همه آبجکت ها پیشوند GBT دارند (نه GOH)، پس می‌شود این را همزمان با
+// نسخه زنده روی یک چارت داشت بدون اینکه به هم بریزند. اسکنر هم این را
+// نمی‌بیند و انتخاب الگوهایش با نسخه زنده همگام نمی‌شود.
+//
 // قواعد تشخیص و چرخه عمر مشترک با اسکنر
 #include "GOD_OF_HUNT_Core.mqh"
 
@@ -28,6 +39,22 @@ ENUM_TIMEFRAMES prevEntryTF     = 0;
 // GOD_OF_HUNT_Core.mqh بالاتر include شده، اول دسته های «تشخیص» آن می‌آیند
 // و بعد دسته های «رسم» همین فایل.
 
+//==================== بازه بک تست ====================
+input group "=== بازه بک تست ==="
+// فقط الگوهایی رسم می‌شوند که *کندل شروعشان* در این بازه باشد:
+//   AB HUNT      -> کندل A
+//   INSIDE BAR   -> کندل فرزند
+//   TICK FRACTAL -> کندل سیگنال
+// این همان زمانی است که در فایل patterns_H4.csv / patterns_H1.csv ستون
+// timeA نوشته شده، پس می‌توانید مستقیم از روی آن فهرست بازه بگذارید.
+//
+// BtTo برابر صفر یعنی «تا آخرین کندل».
+input datetime BtFrom = D'2026.01.01 00:00';  // شروع بازه
+input datetime BtTo   = 0;                    // پایان بازه (0 = تا انتها)
+// چند کندل تاریخچه گشته شود. باید به اندازه ای باشد که بازه بالا را در بر
+// بگیرد، وگرنه الگوهای قدیمی تر اصلا پیدا نمی‌شوند.
+input int      BtHistoryBars = 5000;          // عمق تاریخچه (کندل)
+
 //==================== عمومی — مشترک بین هر سه الگو ====================
 input group "=== عمومی (هر سه الگو) ==="
 // رنگ بر اساس دسته تایم فریم است نه بر اساس الگو، تا وقتی سطوح چند تایم
@@ -36,8 +63,8 @@ input color  StructureColor       = clrDeepSkyBlue;  // رنگ تایم فریم
 input color  TriggerColor         = clrOrange;       // رنگ تایم فریم تریگر
 input color  EntryColor           = clrViolet;       // رنگ تایم فریم ورود
 input bool   EnableAlerts         = false;           // هشدار در لحظات کلیدی (هر سه الگو)
-input bool   ShowDeadPatterns     = true;            // نمایش الگوی باطل/منقضی امروز
-input color  DeadPatternColor     = clrGray;         // رنگ الگوی باطل/منقضی
+// در نسخه بک تست الگوی مرده خاکستری نمی‌شود و همیشه رسم می‌شود، پس
+// ShowDeadPatterns و DeadPatternColor اینجا وجود ندارند.
 
 //==================== AB HUNT — رسم ====================
 input group "=== AB HUNT — رسم ==="
@@ -161,7 +188,7 @@ bool UsesLifecycle(TFCategory cat)
 // پیشوند نام آبجکت ها: <cat>_<tf>_
 string GetTFPrefix(TFCategory cat, ENUM_TIMEFRAMES tf)
 {
-   string catStr = (cat == STRUCTURE) ? "gohst_" : (cat == TRIGGER) ? "gohtr_" : (cat == ENTRY) ? "gohen_" : "gohxx_";
+   string catStr = (cat == STRUCTURE) ? "gbtst_" : (cat == TRIGGER) ? "gbttr_" : (cat == ENTRY) ? "gbten_" : "gbtxx_";
    return catStr + IntegerToString((int)tf) + "_";
 }
 
@@ -203,9 +230,9 @@ void DeleteLiveObjectsOfTF(TFCategory cat, ENUM_TIMEFRAMES tf)
 //   TICK FRACTAL -> "TK"
 bool ObjectBelongsToPattern(string name, int p)
 {
-   if(StringFind(name, "gohst_") != 0 &&
-      StringFind(name, "gohtr_") != 0 &&
-      StringFind(name, "gohen_") != 0) return false;
+   if(StringFind(name, "gbtst_") != 0 &&
+      StringFind(name, "gbttr_") != 0 &&
+      StringFind(name, "gbten_") != 0) return false;
 
    int p1 = StringFind(name, "_");
    int p2 = (p1 >= 0) ? StringFind(name, "_", p1 + 1) : -1;
@@ -278,9 +305,9 @@ void HighlightSelectedTF(TFCategory cat, int selectedIdx)
    string prefix;
    int count = 0;
 
-   if(cat == STRUCTURE)   { prefix = "GOH_ListSt_"; count = ArraySize(StructureTFList); }
-   else if(cat == TRIGGER){ prefix = "GOH_ListTr_"; count = ArraySize(TriggerTFList);   }
-   else if(cat == ENTRY)  { prefix = "GOH_ListEn_"; count = ArraySize(EntryTFList);     }
+   if(cat == STRUCTURE)   { prefix = "GBT_ListSt_"; count = ArraySize(StructureTFList); }
+   else if(cat == TRIGGER){ prefix = "GBT_ListTr_"; count = ArraySize(TriggerTFList);   }
+   else if(cat == ENTRY)  { prefix = "GBT_ListEn_"; count = ArraySize(EntryTFList);     }
    else return;
 
    for(int i = 0; i < count; i++)
@@ -303,7 +330,7 @@ void HighlightSelectedTF(TFCategory cat, int selectedIdx)
 
 string ListPrefix(TFCategory cat)
 {
-   return (cat == STRUCTURE) ? "GOH_ListSt_" : (cat == TRIGGER) ? "GOH_ListTr_" : "GOH_ListEn_";
+   return (cat == STRUCTURE) ? "GBT_ListSt_" : (cat == TRIGGER) ? "GBT_ListTr_" : "GBT_ListEn_";
 }
 
 void ShowTFList(TFCategory cat, int x, int y)
@@ -313,9 +340,9 @@ void ShowTFList(TFCategory cat, int x, int y)
    int count = 0;
    int selectedIdx = 0;
 
-   if(cat == STRUCTURE)    { prefix = "GOH_ListSt_"; count = ArraySize(StructureTFList); selectedIdx = idxStructure; }
-   else if(cat == TRIGGER) { prefix = "GOH_ListTr_"; count = ArraySize(TriggerTFList);   selectedIdx = idxTrigger;   }
-   else if(cat == ENTRY)   { prefix = "GOH_ListEn_"; count = ArraySize(EntryTFList);     selectedIdx = idxEntry;     }
+   if(cat == STRUCTURE)    { prefix = "GBT_ListSt_"; count = ArraySize(StructureTFList); selectedIdx = idxStructure; }
+   else if(cat == TRIGGER) { prefix = "GBT_ListTr_"; count = ArraySize(TriggerTFList);   selectedIdx = idxTrigger;   }
+   else if(cat == ENTRY)   { prefix = "GBT_ListEn_"; count = ArraySize(EntryTFList);     selectedIdx = idxEntry;     }
    else return;
 
    for(int i = 0; i < count; i++)
@@ -384,7 +411,7 @@ void SaveState()
    // اثر انگشت تنظیمات تشخیص، تا اسکنر بتواند بفهمد با همان قواعد کار می‌کند
    // یا نه. ورودی های GOD_OF_HUNTCore برای هر نصب جدا ذخیره می‌شوند، پس این دو
    // می‌توانند بی سروصدا از هم فاصله بگیرند.
-   string cfgName = ConfigObjectName(ChartID());
+   string cfgName = "GBT_Cfg_" + IntegerToString(ChartID());
    if(ObjectFind(0, cfgName) < 0)
    {
       if(ObjectCreate(0, cfgName, OBJ_LABEL, 0, 0, 0))
@@ -420,7 +447,7 @@ void CreateTFButton(string name, int x, int y, string text)
 // خاکستری یعنی خاموش. متن هم تیک دارد تا به رنگ تنها تکیه نشود.
 string PatternButtonName(int p)
 {
-   return "GOH_BtnPat" + IntegerToString(p) + "_" + IntegerToString(ChartID());
+   return "GBT_BtnPat" + IntegerToString(p) + "_" + IntegerToString(ChartID());
 }
 
 void DrawPatternButton(int p)
@@ -485,7 +512,7 @@ static ulong lastObjectClickTime = 0;   // زمان آخرین کلیک پردا
 // هر ثانیه از OnTimer بروز می‌شود، پس روی هر تایم فریمی کار می‌کند.
 void UpdateCandleTimer()
 {
-   string name = "GOH_Timer_" + IntegerToString(ChartID());
+   string name = "GBT_Timer_" + IntegerToString(ChartID());
 
    if(!ShowCandleTimer)
    {
@@ -525,7 +552,7 @@ void UpdateCandleTimer()
 // اگر تایم فریم جاری در نردبان نباشد، چیزی نوشته نمی‌شود.
 void UpdateFractalTFLabel()
 {
-   string name = "GOH_Fract_" + IntegerToString(ChartID());
+   string name = "GBT_Fract_" + IntegerToString(ChartID());
 
    string frac = ShowFractalTF ? FractalTFText((ENUM_TIMEFRAMES)Period()) : "";
 
@@ -590,7 +617,7 @@ bool ForexClosedNow(MqlDateTime &g)
 // ۲۳ دقیقه دیگر لندن بسته می‌شود و فقط نیویورک می‌ماند.
 void UpdateSessionLabel()
 {
-   string name = "GOH_Sess_" + IntegerToString(ChartID());
+   string name = "GBT_Sess_" + IntegerToString(ChartID());
 
    if(!ShowSession)
    {
@@ -654,7 +681,7 @@ void UpdateSessionLabel()
 int OnInit()
 {
    string chartIDStr = IntegerToString(ChartID());
-   stateObjName = StateObjectName(ChartID());
+   stateObjName = "GBT_State_" + IntegerToString(ChartID());
 
    // پیش فرض: همه الگوها روشن. اگر وضعیت ذخیره شده داشت، از همان خوانده می‌شود.
    for(int p = 0; p < PATTERN_COUNT; p++) patternOn[p] = true;
@@ -691,9 +718,9 @@ int OnInit()
    prevEntryTF     = EntryTF;
 
 
-   CreateTFButton("GOH_BtnStructure_" + chartIDStr, 10, 10, "STRUCT: " + TFToStr(StructureTF));
-   CreateTFButton("GOH_BtnTrigger_"   + chartIDStr, 10, 40, "TRIG: "   + TFToStr(TriggerTF));
-   CreateTFButton("GOH_BtnEntry_"     + chartIDStr, 10, 70, "ENTRY: "  + TFToStr(EntryTF));
+   CreateTFButton("GBT_BtnStructure_" + chartIDStr, 10, 10, "STRUCT: " + TFToStr(StructureTF));
+   CreateTFButton("GBT_BtnTrigger_"   + chartIDStr, 10, 40, "TRIG: "   + TFToStr(TriggerTF));
+   CreateTFButton("GBT_BtnEntry_"     + chartIDStr, 10, 70, "ENTRY: "  + TFToStr(EntryTF));
    DrawPatternButtons();
 
    lastBarTime      = 0;
@@ -731,19 +758,19 @@ void ChangeTF(string type, int idx)
    {
       idxStructure = ClampIdx(idx, ArraySize(StructureTFList));
       StructureTF = StructureTFList[idxStructure];
-      UpdateButton("GOH_BtnStructure_" + chartIDStr, "STRUCT: " + TFToStr(StructureTF));
+      UpdateButton("GBT_BtnStructure_" + chartIDStr, "STRUCT: " + TFToStr(StructureTF));
    }
    else if(type == "TRIG")
    {
       idxTrigger = ClampIdx(idx, ArraySize(TriggerTFList));
       TriggerTF = TriggerTFList[idxTrigger];
-      UpdateButton("GOH_BtnTrigger_" + chartIDStr, "TRIG: " + TFToStr(TriggerTF));
+      UpdateButton("GBT_BtnTrigger_" + chartIDStr, "TRIG: " + TFToStr(TriggerTF));
    }
    else if(type == "ENTRY")
    {
       idxEntry = ClampIdx(idx, ArraySize(EntryTFList));
       EntryTF = EntryTFList[idxEntry];
-      UpdateButton("GOH_BtnEntry_" + chartIDStr, "ENTRY: " + TFToStr(EntryTF));
+      UpdateButton("GBT_BtnEntry_" + chartIDStr, "ENTRY: " + TFToStr(EntryTF));
    }
 
    forceRedraw = true;
@@ -760,17 +787,17 @@ static TFCategory currentListCategory = NONE;
 void OnChartEvent(const int id, const long &lparam, const double &dparam, const string &sparam)
 {
    string chartIDStr    = IntegerToString(ChartID());
-   string btnStructName = "GOH_BtnStructure_" + chartIDStr;
-   string btnTrigName   = "GOH_BtnTrigger_"   + chartIDStr;
-   string btnEntryName  = "GOH_BtnEntry_"     + chartIDStr;
+   string btnStructName = "GBT_BtnStructure_" + chartIDStr;
+   string btnTrigName   = "GBT_BtnTrigger_"   + chartIDStr;
+   string btnEntryName  = "GBT_BtnEntry_"     + chartIDStr;
 
    if(id == CHARTEVENT_OBJECT_CLICK)
    {
       bool isOurObject = (sparam == btnStructName || sparam == btnTrigName || sparam == btnEntryName ||
-                          StringFind(sparam, "GOH_BtnPat")  == 0 ||
-                          StringFind(sparam, "GOH_ListSt_") == 0 ||
-                          StringFind(sparam, "GOH_ListTr_") == 0 ||
-                          StringFind(sparam, "GOH_ListEn_") == 0);
+                          StringFind(sparam, "GBT_BtnPat")  == 0 ||
+                          StringFind(sparam, "GBT_ListSt_") == 0 ||
+                          StringFind(sparam, "GBT_ListTr_") == 0 ||
+                          StringFind(sparam, "GBT_ListEn_") == 0);
       if(!isOurObject) return;
 
       ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
@@ -784,10 +811,10 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
       lastClickTime       = now;
       lastObjectClickTime = now;
 
-      if(StringFind(sparam, "GOH_BtnPat") == 0)
+      if(StringFind(sparam, "GBT_BtnPat") == 0)
       {
-         // نام: GOH_BtnPat<p>_<chartID>
-         int p = (int)StringToInteger(StringSubstr(sparam, StringLen("GOH_BtnPat")));
+         // نام: GBT_BtnPat<p>_<chartID>
+         int p = (int)StringToInteger(StringSubstr(sparam, StringLen("GBT_BtnPat")));
          if(p >= 0 && p < PATTERN_COUNT)
          {
             patternOn[p] = !patternOn[p];
@@ -832,23 +859,23 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
          isTriggerListOpen   = false;
          currentListCategory = ENTRY;
       }
-      else if(StringFind(sparam, "GOH_ListSt_") == 0)
+      else if(StringFind(sparam, "GBT_ListSt_") == 0)
       {
-         ChangeTF("STRUCT", (int)StringToInteger(StringSubstr(sparam, StringLen("GOH_ListSt_"))));
+         ChangeTF("STRUCT", (int)StringToInteger(StringSubstr(sparam, StringLen("GBT_ListSt_"))));
          HideTFList(STRUCTURE);
          isStructureListOpen = false;
          currentListCategory = NONE;
       }
-      else if(StringFind(sparam, "GOH_ListTr_") == 0)
+      else if(StringFind(sparam, "GBT_ListTr_") == 0)
       {
-         ChangeTF("TRIG", (int)StringToInteger(StringSubstr(sparam, StringLen("GOH_ListTr_"))));
+         ChangeTF("TRIG", (int)StringToInteger(StringSubstr(sparam, StringLen("GBT_ListTr_"))));
          HideTFList(TRIGGER);
          isTriggerListOpen = false;
          currentListCategory = NONE;
       }
-      else if(StringFind(sparam, "GOH_ListEn_") == 0)
+      else if(StringFind(sparam, "GBT_ListEn_") == 0)
       {
-         ChangeTF("ENTRY", (int)StringToInteger(StringSubstr(sparam, StringLen("GOH_ListEn_"))));
+         ChangeTF("ENTRY", (int)StringToInteger(StringSubstr(sparam, StringLen("GBT_ListEn_"))));
          HideTFList(ENTRY);
          isEntryListOpen = false;
          currentListCategory = NONE;
@@ -908,7 +935,7 @@ void DeleteStaleTFObjects()
    {
       string name = ObjectName(0, i);
 
-      if(StringFind(name, "gohst_") == 0 || StringFind(name, "gohtr_") == 0 || StringFind(name, "gohen_") == 0)
+      if(StringFind(name, "gbtst_") == 0 || StringFind(name, "gbttr_") == 0 || StringFind(name, "gbten_") == 0)
       {
          // فرمت نام: <cat>_<tf>_...  →  تایم فریم بین اولین و دومین آندرلاین است
          int p1 = StringFind(name, "_");
@@ -940,8 +967,10 @@ void DrawSwing(SwingAB &s, TFCategory cat, ENUM_TIMEFRAMES tf, color drawColor, 
    bool active = (s.state == AB_WAIT_RETRACE || s.state == AB_RETRACED || s.state == AB_BROKEN);
 
    // الگوی مرده کاملا خاکستری رسم می‌شود تا با الگوهای زنده اشتباه نشود
+   // بک تست: الگوی مرده هم با رنگ دسته تایم فریم خودش رسم می‌شود.
+   // متن علت ابطال کنار خط B می‌ماند، چون همان چیزی است که موقع بررسی
+   // لازم است بدانید.
    bool dead = (s.state == AB_INVALID || s.state == AB_DONE);
-   if(dead) drawColor = DeadPatternColor;
 
    // --- FVG داخل سویینگ بین idxA و idxB
    if(ShowFVG && (cat == STRUCTURE || cat == TRIGGER))
@@ -1111,7 +1140,6 @@ void DrawInsideBar(InsideBar &ib, TFCategory cat, ENUM_TIMEFRAMES tf, int tfSecs
 {
    // الگوی منقضی شده مثل الگوی مرده AB خاکستری می‌ماند تا انتهای همان روز،
    // تا بشود بررسی کرد که درست کنار گذاشته شده یا نه.
-   if(ib.expired) drawColor = DeadPatternColor;
 
    string base = GetTFPrefix(cat, tf) + "IB" + IntegerToString((long)ib.timeChild);
    datetime lineEnd = ib.timeChild + tfSecs * IBLineCandles;
@@ -1214,7 +1242,7 @@ void DrawTickFractal(TickFractal &tk, TFCategory cat, ENUM_TIMEFRAMES tf,
 {
    // دو پاره خط مادر→فرزند→سیگنال. در سویینگ نزولی از لوها و در صعودی از
    // های ها — همان شکلی که اسم الگو از آن می‌آید.
-   color drawColor = tk.expired ? DeadPatternColor : catColor;
+   color drawColor = catColor;
 
    string base = GetTFPrefix(cat, tf) + "TK" + IntegerToString((long)tk.timeSignal);
 
@@ -1262,6 +1290,16 @@ void MaybeAlert(SwingAB &s, TFCategory cat, ENUM_TIMEFRAMES tf, int rates_total)
 }
 
 //+------------------------------------------------------------------+
+// آیا کندل شروع الگو داخل بازه بک تست است؟
+// BtTo == 0 یعنی بدون سقف.
+bool InBtRange(datetime t)
+{
+   if(t < BtFrom) return false;
+   if(BtTo > 0 && t > BtTo) return false;
+   return true;
+}
+
+//+------------------------------------------------------------------+
 void ProcessIndicator()
 {
    CheckTFChangeAndDelete();
@@ -1284,6 +1322,10 @@ void ProcessIndicator()
    bool ibOn = patternOn[PATTERN_INSIDE_BAR];
    bool tkOn = patternOn[PATTERN_TICK_FRACTAL];
 
+   // حالت بک تست: الگوی مرده حذف نشود و تشخیص IB/TICK کل تاریخچه را بگردد
+   KeepAllDeadPatterns = true;
+   ScanAllHistory      = true;
+
    // تشخیص، چرخه عمر و فیلترها همگی در GOD_OF_HUNTCore انجام می‌شوند تا اندیکاتور
    // و اسکنر دقیقا یک منطق داشته باشند. اینجا فقط رسم می‌ماند.
    MqlRates rates[];
@@ -1293,38 +1335,33 @@ void ProcessIndicator()
 
    if(abOn)
    {
-      nKept = AnalyzeSymbol(_Symbol, tf, ABCDHistoryBars, maxLookback,
+      nKept = AnalyzeSymbol(_Symbol, tf, BtHistoryBars, maxLookback,
                             (cat == ENTRY), ShowPreviousABs,
                             rates, rates_total, kept);
       if(nKept < 0) return;
    }
 
-   InsideBar ibs[];
-   int nIB = 0;
-
-   if(ibOn)
+   // اگر AB خاموش باشد داده کپی نشده؛ برای IB و TICK اینجا با همان عمق
+   // BtHistoryBars گرفته می‌شود (توابع Analyze* عمد ABCDHistoryBars را
+   // استفاده می‌کنند که برای بک تست کم است).
+   if(!abOn && (ibOn || tkOn))
    {
-      // اگر AB روشن است داده همین حالا کپی شده و دوباره کپی نمی‌شود
-      if(abOn) nIB = CollectInsideBars(rates, rates_total, ibs);
-      else
-      {
-         nIB = AnalyzeInsideBars(_Symbol, tf, ibs);
-         if(nIB < 0) return;
-      }
+      int avail = Bars(_Symbol, tf);
+      if(avail < 3) return;
+
+      int need = BtHistoryBars;
+      if(need > avail) need = avail;
+
+      ArraySetAsSeries(rates, false);
+      rates_total = CopyRates(_Symbol, tf, 0, need, rates);
+      if(rates_total < 3) return;
    }
+
+   InsideBar ibs[];
+   int nIB = ibOn ? CollectInsideBars(rates, rates_total, ibs) : 0;
 
    TickFractal tks[];
-   int nTK = 0;
-
-   if(tkOn)
-   {
-      if(abOn) nTK = CollectTickFractals(rates, rates_total, tks);
-      else
-      {
-         nTK = AnalyzeTickFractals(_Symbol, tf, tks);
-         if(nTK < 0) return;
-      }
-   }
+   int nTK = tkOn ? CollectTickFractals(rates, rates_total, tks) : 0;
 
    // امضای وضعیت الگوهای قطعی شده. اگر عوض شود باید کامل بازترسیم کنیم،
    // حتی اگر هنوز کندل جدیدی باز نشده باشد.
@@ -1354,8 +1391,9 @@ void ProcessIndicator()
 
    for(int k = 0; k < nKept; k++)
    {
+      if(!InBtRange(kept[k].timeA)) continue;
+
       bool isDead = (kept[k].state == AB_INVALID || kept[k].state == AB_DONE);
-      if(isDead && !ShowDeadPatterns) continue;
 
       if(fullRedraw || kept[k].live)
          DrawSwing(kept[k], cat, tf, drawColor, tfSecs, rates, rates_total);
@@ -1370,6 +1408,8 @@ void ProcessIndicator()
    {
       for(int k = 0; k < nIB; k++)
       {
+         if(!InBtRange(ibs[k].timeChild)) continue;
+
          DrawInsideBar(ibs[k], cat, tf, tfSecs, drawColor);
 
          // ageCandles == 1 یعنی فرزند همین کندل قبلی بسته شده است؛ الگو یک
@@ -1380,6 +1420,8 @@ void ProcessIndicator()
 
       for(int k = 0; k < nTK; k++)
       {
+         if(!InBtRange(tks[k].timeSignal)) continue;
+
          DrawTickFractal(tks[k], cat, tf, drawColor);
 
          if(EnableAlerts && tks[k].ageCandles == 1)
@@ -1448,21 +1490,21 @@ void OnDeinit(const int reason)
       {
          string name = ObjectName(0, i);
 
-         if(StringFind(name, "gohst_") == 0 ||
-            StringFind(name, "gohtr_") == 0 ||
-            StringFind(name, "gohen_") == 0 ||
-            StringFind(name, "GOH_ListSt_") == 0 ||
-            StringFind(name, "GOH_ListTr_") == 0 ||
-            StringFind(name, "GOH_ListEn_") == 0 ||
-            StringFind(name, "GOH_BtnStructure_") == 0 ||
-            StringFind(name, "GOH_BtnTrigger_") == 0 ||
-            StringFind(name, "GOH_BtnEntry_") == 0 ||
-            StringFind(name, "GOH_BtnPat") == 0 ||
-            StringFind(name, "GOH_State_") == 0 ||
-            StringFind(name, "GOH_Cfg_") == 0 ||
-            StringFind(name, "GOH_Timer_") == 0 ||
-            StringFind(name, "GOH_Fract_") == 0 ||
-            StringFind(name, "GOH_Sess_") == 0)
+         if(StringFind(name, "gbtst_") == 0 ||
+            StringFind(name, "gbttr_") == 0 ||
+            StringFind(name, "gbten_") == 0 ||
+            StringFind(name, "GBT_ListSt_") == 0 ||
+            StringFind(name, "GBT_ListTr_") == 0 ||
+            StringFind(name, "GBT_ListEn_") == 0 ||
+            StringFind(name, "GBT_BtnStructure_") == 0 ||
+            StringFind(name, "GBT_BtnTrigger_") == 0 ||
+            StringFind(name, "GBT_BtnEntry_") == 0 ||
+            StringFind(name, "GBT_BtnPat") == 0 ||
+            StringFind(name, "GBT_State_") == 0 ||
+            StringFind(name, "GBT_Cfg_") == 0 ||
+            StringFind(name, "GBT_Timer_") == 0 ||
+            StringFind(name, "GBT_Fract_") == 0 ||
+            StringFind(name, "GBT_Sess_") == 0)
          {
             ObjectDelete(0, name);
          }

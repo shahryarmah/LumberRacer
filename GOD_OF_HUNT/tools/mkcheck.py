@@ -25,6 +25,8 @@ def clean(text):
         if re.match(r'^\s*input\s+group\b', line):
             continue
         line = re.sub(r'^(\s*)input\s+', r'\1', line)
+        # D'2026.01.01 00:00'  — لیترال تاریخ مخصوص MQL5 است و ++C ندارد
+        line = re.sub(r"D'[^']*'", '0', line)
         line = re.sub(r'&(\w+)\[\]', r'\1[]', line)
         line = re.sub(r'(\w+)\[\]\s*;', r'\1[8192];', line)
         out.append(line)
