@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                                        GOD_OF_HUNT_Core.mqh   v1.11   |
+//|                                        GOD_OF_HUNT_Core.mqh   v1.12   |
 //|                                                                  |
 //| منطق مشترک تشخیص سویینگ و چرخه عمر الگوی ABCD.                   |
 //| هم GOD_OF_HUNT.mq5 (اندیکاتور چارت) و هم GOD_OF_HUNT_Scanner.mq5           |
@@ -1210,6 +1210,28 @@ int BuildActiveSwings(MqlRates &rates[], int rates_total, double avgRange,
 // تحلیل کامل یک نماد و تایم فریم: کپی داده، تشخیص، چرخه عمر و فیلترها.
 // rates و out پر می‌شوند. مقدار برگشتی تعداد الگوهای فعال است،
 // یا -1 اگر داده کافی در دسترس نباشد (مثلا هنوز دانلود نشده).
+// بخش مشترک: از روی کندل های از قبل کپی شده تشخیص و چرخه عمر را اجرا
+// می‌کند. جدا شده تا هم AnalyzeSymbol (که از دم تاریخچه می‌خواند) و هم
+// AnalyzeSymbolRange (که یک بازه تاریخی می‌خواند) یک منطق داشته باشند.
+int AnalyzeLoaded(MqlRates &rates[], int rates_total, ENUM_TIMEFRAMES tf,
+                  int maxLookback, bool keepOnlyLast, bool showPrevious,
+                  SwingAB &out[])
+{
+   // میانگین رنج کندل ها برای سنجش «کندل شکست خیلی کوچک نباشد»
+   double sumRange = 0.0;
+   for(int m = 0; m < rates_total; m++)
+      sumRange += (rates[m].high - rates[m].low);
+   double avgRange = sumRange / rates_total;
+
+   int scanFrom = EnableABCD ? MinCandles : (rates_total - maxLookback - MaxCandles);
+
+   SwingAB raw[];
+   int nRaw = CollectSwings(rates, rates_total, scanFrom, raw);
+
+   return BuildActiveSwings(rates, rates_total, avgRange, raw, nRaw, out,
+                            keepOnlyLast, showPrevious, tf);
+}
+
 int AnalyzeSymbol(string symbol, ENUM_TIMEFRAMES tf, int historyBars, int maxLookback,
                   bool keepOnlyLast, bool showPrevious,
                   MqlRates &rates[], int &rates_total, SwingAB &out[])
@@ -1226,19 +1248,29 @@ int AnalyzeSymbol(string symbol, ENUM_TIMEFRAMES tf, int historyBars, int maxLoo
    rates_total = CopyRates(symbol, tf, 0, needed, rates);
    if(rates_total <= MinCandles) return -1;
 
-   // میانگین رنج کندل ها برای سنجش «کندل شکست خیلی کوچک نباشد»
-   double sumRange = 0.0;
-   for(int m = 0; m < rates_total; m++)
-      sumRange += (rates[m].high - rates[m].low);
-   double avgRange = sumRange / rates_total;
+   return AnalyzeLoaded(rates, rates_total, tf, maxLookback,
+                        keepOnlyLast, showPrevious, out);
+}
 
-   int scanFrom = EnableABCD ? MinCandles : (rates_total - maxLookback - MaxCandles);
+// مثل AnalyzeSymbol ولی داده را از یک بازه زمانی می‌گیرد، نه از دم تاریخچه.
+//
+// برای بک تست لازم است: وقتی بازه مثلا یک سال پیش است، فقط همان پنجره
+// خوانده می‌شود نه از آنجا تا امروز. آخرین کندل این بازه برای هسته حکم
+// «کندل جاری» را دارد، پس وضعیت الگوها همان چیزی می‌شود که در انتهای بازه
+// دیده می‌شد.
+int AnalyzeSymbolRange(string symbol, ENUM_TIMEFRAMES tf,
+                       datetime fromTime, datetime toTime, int maxLookback,
+                       bool keepOnlyLast, bool showPrevious,
+                       MqlRates &rates[], int &rates_total, SwingAB &out[])
+{
+   rates_total = 0;
 
-   SwingAB raw[];
-   int nRaw = CollectSwings(rates, rates_total, scanFrom, raw);
+   ArraySetAsSeries(rates, false);
+   rates_total = CopyRates(symbol, tf, fromTime, toTime, rates);
+   if(rates_total <= MinCandles) return -1;
 
-   return BuildActiveSwings(rates, rates_total, avgRange, raw, nRaw, out,
-                            keepOnlyLast, showPrevious, tf);
+   return AnalyzeLoaded(rates, rates_total, tf, maxLookback,
+                        keepOnlyLast, showPrevious, out);
 }
 
 //+------------------------------------------------------------------+

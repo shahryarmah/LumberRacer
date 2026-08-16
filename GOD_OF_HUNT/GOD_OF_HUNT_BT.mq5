@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
-//|                                            GOD_OF_HUNT_BT.mq5   v1.00   |
+//|                                            GOD_OF_HUNT_BT.mq5   v1.01   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "1.00"
+#property version   "1.01"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
@@ -51,9 +51,6 @@ input group "=== بازه بک تست ==="
 // BtTo برابر صفر یعنی «تا آخرین کندل».
 input datetime BtFrom = D'2026.01.01 00:00';  // شروع بازه
 input datetime BtTo   = 0;                    // پایان بازه (0 = تا انتها)
-// چند کندل تاریخچه گشته شود. باید به اندازه ای باشد که بازه بالا را در بر
-// بگیرد، وگرنه الگوهای قدیمی تر اصلا پیدا نمی‌شوند.
-input int      BtHistoryBars = 5000;          // عمق تاریخچه (کندل)
 
 //==================== عمومی — مشترک بین هر سه الگو ====================
 input group "=== عمومی (هر سه الگو) ==="
@@ -152,6 +149,11 @@ string stateObjName;
 bool isStructureListOpen = false;
 bool isTriggerListOpen   = false;
 bool isEntryListOpen     = false;
+
+// وضعیت آخرین بارگذاری، برای برچسب اطلاعات روی چارت
+datetime btLoadFrom = 0, btLoadTo = 0;
+int      btLoadBars = 0;
+int      btDrawn    = 0;
 
 // کنترل بازترسیم
 datetime lastBarTime       = 0;
@@ -1290,6 +1292,37 @@ void MaybeAlert(SwingAB &s, TFCategory cat, ENUM_TIMEFRAMES tf, int rates_total)
 }
 
 //+------------------------------------------------------------------+
+// برچسب وضعیت بک تست: چه بازه ای واقعا بار شد، چند کندل، و چند الگو رسم شد.
+// بدون این، اگر متاتریدر تاریخچه آن بازه را نداشته باشد چارت بی سروصدا
+// خالی می‌ماند و معلوم نیست ایراد از بازه است یا از تنظیمات.
+void UpdateBtInfo()
+{
+   string name = "GBT_Info_" + IntegerToString(ChartID());
+
+   if(ObjectFind(0, name) < 0)
+   {
+      ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
+      ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+      ObjectSetInteger(0, name, OBJPROP_XDISTANCE, 10);
+      ObjectSetInteger(0, name, OBJPROP_YDISTANCE, 242);
+      ObjectSetInteger(0, name, OBJPROP_FONTSIZE, 9);
+      ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+   }
+
+   string txt;
+   if(btLoadBars <= 0)
+      txt = "BT: تاریخچه این بازه در ترمینال نیست";
+   else
+      txt = "BT " + TimeToString(BtFrom, TIME_DATE) +
+            " .. " + (BtTo > 0 ? TimeToString(BtTo, TIME_DATE) : "now") +
+            "   بار شده " + IntegerToString(btLoadBars) + " کندل" +
+            "   رسم " + IntegerToString(btDrawn) + " الگو";
+
+   ObjectSetInteger(0, name, OBJPROP_COLOR, btLoadBars > 0 ? clrSilver : clrTomato);
+   ObjectSetString(0, name, OBJPROP_TEXT, txt);
+}
+
+//+------------------------------------------------------------------+
 // آیا کندل شروع الگو داخل بازه بک تست است؟
 // BtTo == 0 یعنی بدون سقف.
 bool InBtRange(datetime t)
@@ -1297,6 +1330,38 @@ bool InBtRange(datetime t)
    if(t < BtFrom) return false;
    if(BtTo > 0 && t > BtTo) return false;
    return true;
+}
+
+//+------------------------------------------------------------------+
+// بازه ای که واقعا از تاریخچه خوانده می‌شود.
+//
+// فقط همین پنجره بار می‌شود، نه از BtFrom تا امروز — وگرنه انتخاب بازه ای
+// از یک سال پیش یعنی خواندن یک سال کندل که چارت را سنگین می‌کند.
+//
+// دو حاشیه لازم است و هر دو از خود ورودی های تشخیص حساب می‌شوند:
+//
+//   گرم کردن (قبل از BtFrom): الگویی که A اش نزدیک ابتدای بازه است، برای
+//     پیدا شدن به کندل های قبل از خودش نیاز دارد — به اندازه بلندترین
+//     سویینگ ممکن (MaxABSpan) به علاوه پنجره تشخیص (MaxCandles).
+//
+//   دنباله (بعد از BtTo): الگویی که نزدیک انتهای بازه تشکیل شده باید
+//     فرصت کند چرخه عمرش را طی کند (C، هانت، ابطال)، وگرنه ناتمام رسم
+//     می‌شود. سقفش MaxRetraceBars است.
+//
+// ضریب ۲ برای جبران شکاف آخر هفته و تعطیلی است: تبدیل «تعداد کندل» به
+// «زمان» روی بازار پنج روزه دقیق نیست و کمی دست و دلبازی ارزان تر از
+// کم آوردن داده است.
+void BtDataRange(ENUM_TIMEFRAMES tf, datetime &fromT, datetime &toT)
+{
+   long secs = (long)PeriodSeconds(tf);
+
+   long warmBars = MaxABSpan + MaxCandles + 20;
+   long tailBars = (MaxRetraceBars > 0 ? MaxRetraceBars : 100) + 50;
+
+   fromT = (datetime)((long)BtFrom - warmBars * secs * 2);
+
+   if(BtTo > 0) toT = (datetime)((long)BtTo + tailBars * secs * 2);
+   else         toT = TimeCurrent();
 }
 
 //+------------------------------------------------------------------+
@@ -1326,6 +1391,11 @@ void ProcessIndicator()
    KeepAllDeadPatterns = true;
    ScanAllHistory      = true;
 
+   datetime btFrom = 0, btTo = 0;
+   BtDataRange(tf, btFrom, btTo);
+   btLoadFrom = btFrom;
+   btLoadTo   = btTo;
+
    // تشخیص، چرخه عمر و فیلترها همگی در GOD_OF_HUNTCore انجام می‌شوند تا اندیکاتور
    // و اسکنر دقیقا یک منطق داشته باشند. اینجا فقط رسم می‌ماند.
    MqlRates rates[];
@@ -1335,26 +1405,22 @@ void ProcessIndicator()
 
    if(abOn)
    {
-      nKept = AnalyzeSymbol(_Symbol, tf, BtHistoryBars, maxLookback,
-                            (cat == ENTRY), ShowPreviousABs,
-                            rates, rates_total, kept);
-      if(nKept < 0) return;
+      nKept = AnalyzeSymbolRange(_Symbol, tf, btFrom, btTo, maxLookback,
+                                 (cat == ENTRY), ShowPreviousABs,
+                                 rates, rates_total, kept);
+      btLoadBars = rates_total;
+      if(nKept < 0) { btLoadBars = 0; UpdateBtInfo(); return; }
    }
 
-   // اگر AB خاموش باشد داده کپی نشده؛ برای IB و TICK اینجا با همان عمق
-   // BtHistoryBars گرفته می‌شود (توابع Analyze* عمد ABCDHistoryBars را
-   // استفاده می‌کنند که برای بک تست کم است).
+   // اگر AB خاموش باشد داده کپی نشده؛ برای IB و TICK همان بازه اینجا
+   // خوانده می‌شود (توابع Analyze* عمدا از دم تاریخچه می‌خوانند که برای
+   // بک تست به کار نمی‌آید).
    if(!abOn && (ibOn || tkOn))
    {
-      int avail = Bars(_Symbol, tf);
-      if(avail < 3) return;
-
-      int need = BtHistoryBars;
-      if(need > avail) need = avail;
-
       ArraySetAsSeries(rates, false);
-      rates_total = CopyRates(_Symbol, tf, 0, need, rates);
-      if(rates_total < 3) return;
+      rates_total = CopyRates(_Symbol, tf, btFrom, btTo, rates);
+      btLoadBars  = (rates_total > 0) ? rates_total : 0;
+      if(rates_total < 3) { UpdateBtInfo(); return; }
    }
 
    InsideBar ibs[];
@@ -1389,9 +1455,12 @@ void ProcessIndicator()
    color drawColor = GetCategoryColor(cat);
    int   tfSecs    = PeriodSeconds(tf);
 
+   btDrawn = 0;
+
    for(int k = 0; k < nKept; k++)
    {
       if(!InBtRange(kept[k].timeA)) continue;
+      btDrawn++;
 
       bool isDead = (kept[k].state == AB_INVALID || kept[k].state == AB_DONE);
 
@@ -1409,6 +1478,7 @@ void ProcessIndicator()
       for(int k = 0; k < nIB; k++)
       {
          if(!InBtRange(ibs[k].timeChild)) continue;
+         btDrawn++;
 
          DrawInsideBar(ibs[k], cat, tf, tfSecs, drawColor);
 
@@ -1421,6 +1491,7 @@ void ProcessIndicator()
       for(int k = 0; k < nTK; k++)
       {
          if(!InBtRange(tks[k].timeSignal)) continue;
+         btDrawn++;
 
          DrawTickFractal(tks[k], cat, tf, drawColor);
 
@@ -1444,6 +1515,7 @@ void ProcessIndicator()
       }
    }
 
+   UpdateBtInfo();
    ChartRedraw();
 }
 
@@ -1504,7 +1576,8 @@ void OnDeinit(const int reason)
             StringFind(name, "GBT_Cfg_") == 0 ||
             StringFind(name, "GBT_Timer_") == 0 ||
             StringFind(name, "GBT_Fract_") == 0 ||
-            StringFind(name, "GBT_Sess_") == 0)
+            StringFind(name, "GBT_Sess_") == 0 ||
+            StringFind(name, "GBT_Info_") == 0)
          {
             ObjectDelete(0, name);
          }
