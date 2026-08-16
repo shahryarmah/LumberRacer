@@ -38,8 +38,33 @@ static const int AFTER_STOP_BARS   = 60;
 // «استاپ با اختلاف کم» یعنی نفوذ کمتر از این نسبت از فاصله استاپ
 static const double NEAR_STOP_R    = 0.5;
 
+// --- تنظیمات قابل تغییر بک تست، تا بشود اثر هر قاعده را جدا سنجید
+struct Cfg
+{
+   // کندل سیگنال (کندلی که B را می‌شکند) نباید ضعیف و پرسایه باشد:
+   // بادی حداقل این درصد از کل رنج کندل. صفر = فیلتر خاموش.
+   double sigMinBodyPct = 0.0;
+
+   // ورود با ریسک به ریوارد هدف تا TP1.
+   // اگر کلوز کندل تایید نسبت بدتری بدهد، به جای ورود فوری یک سفارش
+   // برگشتی روی قیمتی گذاشته می‌شود که دقیقا این نسبت را بسازد:
+   //     E = (TP1 + rr * SL) / (1 + rr)
+   // صفر = ورود روی کلوز کندل تایید (رفتار قدیم).
+   double targetRR = 0.0;
+
+   // چند کندل برای برگشت قیمت به نقطه ورود صبر می‌کنیم
+   int    pullbackBars = 60;
+};
+static Cfg g_cfg;
+// تنظیمی که گزارش تفصیلی با آن چاپ می‌شود
+static const double SHOW_BODY = 70.0;
+static const double SHOW_RR   = 2.0;
+static bool g_quiet = false;
+#define OUT if(!g_quiet) printf
+
 enum MissReason { MISS_NONE = 0, MISS_NO_AB, MISS_NO_BREAK, MISS_NO_CONFIRM,
-                  MISS_WINDOW, MISS_BAD_TARGET };
+                  MISS_WINDOW, MISS_BAD_TARGET, MISS_WEAK_SIGNAL,
+                  MISS_NO_PULLBACK };
 
 static const char *MissText(MissReason m)
 {
@@ -51,6 +76,8 @@ static const char *MissText(MissReason m)
       case MISS_NO_CONFIRM: return "B شکست ولی کندل تایید نیامد";
       case MISS_WINDOW:     return "پنجره تمام شد";
       case MISS_BAD_TARGET: return "تارگت پشت سر ورود بود (قیمت رد شده بود)";
+      case MISS_WEAK_SIGNAL:return "کندل سیگنال ضعیف/پرسایه بود";
+      case MISS_NO_PULLBACK:return "قیمت به نقطه ورود برنگشت";
    }
    return "?";
 }
@@ -208,6 +235,22 @@ static Trade RunLegTrade(const std::vector<MqlRates> &lo, int loTF,
 
             if(s.state != AB_BROKEN || s.idxHunt < 0) continue;
 
+            // --- کیفیت کندل سیگنال: نباید ضعیف و پرسایه باشد.
+            // بادی نسبت به کل رنج کندل سنجیده می‌شود، پس این شرط خودبه‌خود
+            // مجموع سایه ها را هم محدود می‌کند.
+            if(g_cfg.sigMinBodyPct > 0.0)
+            {
+               const MqlRates &sc = lo[s.idxHunt];
+               double rng  = sc.high - sc.low;
+               double body = MathAbs(sc.close - sc.open);
+
+               if(rng <= 0.0 || body / rng * 100.0 < g_cfg.sigMinBodyPct)
+               {
+                  if(tr.miss == MISS_NO_BREAK) tr.miss = MISS_WEAK_SIGNAL;
+                  continue;
+               }
+            }
+
             // کندل سیگنال = کندلی که B را شکست
             tr.miss    = MISS_NO_CONFIRM;
             sigTime    = (long long)lo[s.idxHunt].time;
@@ -233,6 +276,41 @@ static Trade RunLegTrade(const std::vector<MqlRates> &lo, int loTF,
       if(!confirmed) continue;
 
       double entry = lo[i].close;
+
+      // --- ورود با ریسک به ریوارد هدف تا TP1.
+      //
+      // اگر کلوز کندل تایید خیلی به تارگت نزدیک و از استاپ دور باشد، نسبت
+      // بد می‌شود. به جای ورود فوری، قیمتی حساب می‌شود که دقیقا نسبت هدف را
+      // بسازد و منتظر برگشت قیمت به آن می‌مانیم:
+      //
+      //     |TP1 - E| = rr * |E - SL|   ->   E = (TP1 + rr*SL) / (1 + rr)
+      //
+      // اگر کلوز از قبل نسبت بهتری بدهد، همانجا وارد می‌شویم.
+      if(g_cfg.targetRR > 0.0)
+      {
+         double want = (sigA + g_cfg.targetRR * sigD) / (1.0 + g_cfg.targetRR);
+         bool   needPullback = longTrade ? (entry > want) : (entry < want);
+
+         if(needPullback)
+         {
+            int  j = i + 1, waitedPb = 0;
+            bool filled = false;
+
+            for(; j < (int)lo.size() && waitedPb < g_cfg.pullbackBars; j++, waitedPb++)
+            {
+               // اگر قیمت بدون برگشت به تارگت رسید، معامله از دست رفت
+               if(longTrade ? (lo[j].high >= sigA) : (lo[j].low <= sigA)) break;
+
+               bool touched = longTrade ? (lo[j].low <= want) : (lo[j].high >= want);
+               if(touched) { filled = true; break; }
+            }
+
+            if(!filled) { tr.miss = MISS_NO_PULLBACK; break; }
+
+            entry = want;
+            i     = j;          // معامله از همین کندل پیگیری می‌شود
+         }
+      }
 
       // اعتبار هندسی: استاپ باید پشت ورود و هر دو تارگت جلوی آن باشند.
       // اگر قیمت قبل از ورود از تارگت رد شده باشد، فرض ستاپ از بین رفته و
@@ -351,8 +429,8 @@ struct Stats
 
    void print(const char *label) const
    {
-      if(n == 0) { printf("  %-12s معامله ای نبود\n", label); return; }
-      printf("  %-12s معامله=%2d  TP2=%2d  TP1=%2d  استاپ=%2d  باز=%2d"
+      if(n == 0) { OUT("  %-12s معامله ای نبود\n", label); return; }
+      OUT("  %-12s معامله=%2d  TP2=%2d  TP1=%2d  استاپ=%2d  باز=%2d"
              "  |  R کل:  TP1=%+.2f  TP2=%+.2f  نصف=%+.2f\n",
              label, n, win2, win1, loss, open, sum1, sum2, sumH);
    }
@@ -367,16 +445,16 @@ static void Report(const char *title,
 
    long long from = MathMax(hi.front().time, lo.front().time);
 
-   printf("\n================================================================\n");
-   printf(" %s   از %s\n", title, Stamp(from).c_str());
-   printf("================================================================\n");
+   OUT("\n================================================================\n");
+   OUT(" %s   از %s\n", title, Stamp(from).c_str());
+   OUT("================================================================\n");
 
    std::vector<Setup> setups;
    CollectSetups(hi, hiTF, from, setups);
 
    Stats s1, s2;
    int nFvg = 0, nHunt = 0;
-   int miss1[6] = {0,0,0,0,0,0}, miss2[6] = {0,0,0,0,0,0};
+   int miss1[8] = {0}, miss2[8] = {0};
    std::vector<const Setup*> nearMiss;
 
    for(size_t q = 0; q < setups.size(); q++)
@@ -409,23 +487,23 @@ static void Report(const char *title,
       }
    }
 
-   printf("\n--- ستاپ ها\n");
-   printf("  الگوی تایم بالا (C ok)                : %d\n", (int)setups.size());
-   printf("  قیمت به FVG رسید (پنجره معامله ۱)     : %d\n", nFvg);
-   printf("  B تایم بالا هانت شد (پنجره معامله ۲)  : %d\n", nHunt);
+   OUT("\n--- ستاپ ها\n");
+   OUT("  الگوی تایم بالا (C ok)                : %d\n", (int)setups.size());
+   OUT("  قیمت به FVG رسید (پنجره معامله ۱)     : %d\n", nFvg);
+   OUT("  B تایم بالا هانت شد (پنجره معامله ۲)  : %d\n", nHunt);
 
-   printf("\n--- نتیجه معامله ها\n");
+   OUT("\n--- نتیجه معامله ها\n");
    s1.print("معامله ۱:");
    s2.print("معامله ۲:");
 
-   printf("\n--- چرا ورود انجام نشد (سطح هانت شد ولی تایم پایین ورود نداد)\n");
-   for(int m = 1; m <= 5; m++)
+   OUT("\n--- چرا ورود انجام نشد (سطح هانت شد ولی تایم پایین ورود نداد)\n");
+   for(int m = 1; m <= 7; m++)
       if(miss1[m] || miss2[m])
-         printf("  %-28s  معامله۱=%d  معامله۲=%d\n", MissText((MissReason)m),
+         OUT("  %-28s  معامله۱=%d  معامله۲=%d\n", MissText((MissReason)m),
                 miss1[m], miss2[m]);
 
    // --- ستاپ های از دست رفته: اگر ورود نداشتیم، آیا تارگت زده می‌شد؟
-   printf("\n--- ستاپ های بدون ورود: قیمت به تارگت رسید یا نه؟\n");
+   OUT("\n--- ستاپ های بدون ورود: قیمت به تارگت رسید یا نه؟\n");
    int missedHitB = 0, missedNotB = 0, missedHitC = 0, missedNotC = 0;
 
    for(size_t q = 0; q < setups.size(); q++)
@@ -453,15 +531,15 @@ static void Report(const char *title,
       }
    }
 
-   printf("  معامله ۱ از دست رفته: به B تایم بالا رسید=%d   نرسید=%d\n",
+   OUT("  معامله ۱ از دست رفته: به B تایم بالا رسید=%d   نرسید=%d\n",
           missedHitB, missedNotB);
-   printf("  معامله ۲ از دست رفته: به C تایم بالا رسید=%d   نرسید=%d\n",
+   OUT("  معامله ۲ از دست رفته: به C تایم بالا رسید=%d   نرسید=%d\n",
           missedHitC, missedNotC);
 
    // --- استاپ های با اختلاف کم
-   printf("\n--- استاپ ها: چقدر قیمت از استاپ رد شد و بعدش چه شد\n");
-   printf("  (beyond = بیشترین نفوذ بعد از استاپ، بر حسب فاصله استاپ،");
-   printf(" در %d کندل بعد)\n", AFTER_STOP_BARS);
+   OUT("\n--- استاپ ها: چقدر قیمت از استاپ رد شد و بعدش چه شد\n");
+   OUT("  (beyond = بیشترین نفوذ بعد از استاپ، بر حسب فاصله استاپ،");
+   OUT(" در %d کندل بعد)\n", AFTER_STOP_BARS);
 
    int nStop = 0, nNear = 0, nNearThenTP = 0;
    double sumBeyond = 0.0;
@@ -485,14 +563,14 @@ static void Report(const char *title,
       }
    }
 
-   printf("  کل استاپ ها: %d   |   میانگین نفوذ بعد از استاپ: %.0f%% از ریسک\n",
+   OUT("  کل استاپ ها: %d   |   میانگین نفوذ بعد از استاپ: %.0f%% از ریسک\n",
           nStop, nStop ? (sumBeyond / nStop) * 100.0 : 0.0);
-   printf("  «کم رد شد» (نفوذ <= %.0f%% ریسک): %d   از آنها بعدش به تارگت رسید: %d\n",
+   OUT("  «کم رد شد» (نفوذ <= %.0f%% ریسک): %d   از آنها بعدش به تارگت رسید: %d\n",
           NEAR_STOP_R * 100.0, nNear, nNearThenTP);
 
    if(nNear > 0)
    {
-      printf("\n  موارد «کم رد شد» — اینها با کمی استاپ بازتر نجات می‌یافتند:\n");
+      OUT("\n  موارد «کم رد شد» — اینها با کمی استاپ بازتر نجات می‌یافتند:\n");
       for(size_t q = 0; q < setups.size(); q++)
       {
          const Setup &st = setups[q];
@@ -504,7 +582,7 @@ static void Report(const char *title,
             if(!tr.entered || !tr.stopped) continue;
             if(tr.beyondStopR > NEAR_STOP_R) continue;
 
-            printf("   %s  معامله%d %s  ورود %.2f  SL %.2f  ریسک %.2f"
+            OUT("   %s  معامله%d %s  ورود %.2f  SL %.2f  ریسک %.2f"
                    "  نفوذ %.2f (%.0f%%)  بعدش: %s%s\n",
                    Stamp(tr.tEntry).c_str(), t + 1, tr.isLong ? "خرید" : "فروش",
                    tr.entry, tr.stop, MathAbs(tr.entry - tr.stop),
@@ -516,7 +594,7 @@ static void Report(const char *title,
    }
 
    // --- فهرست کامل معامله ها
-   printf("\n--- فهرست معامله ها\n");
+   OUT("\n--- فهرست معامله ها\n");
    for(size_t q = 0; q < setups.size(); q++)
    {
       const Setup &st = setups[q];
@@ -528,7 +606,7 @@ static void Report(const char *title,
          if(!tr.entered) continue;
 
          const char *res = tr.stopped ? "استاپ" : tr.hitTP2 ? "TP2" : tr.hitTP1 ? "TP1" : "باز";
-         printf("  %s  معامله%d %s  ورود %.2f  SL %.2f  TP1 %.2f  TP2 %.2f  -> %-6s"
+         OUT("  %s  معامله%d %s  ورود %.2f  SL %.2f  TP1 %.2f  TP2 %.2f  -> %-6s"
                 "  R(TP2)=%+.2f\n",
                 Stamp(tr.tEntry).c_str(), t + 1, tr.isLong ? "خرید " : "فروش",
                 tr.entry, tr.stop, tr.tp1, tr.tp2, res, tr.rTP2);
@@ -638,11 +716,87 @@ static void RRAnalysis()
           avgRR2, 100.0 / (1.0 + avgRR2), 100.0 * wins2 / n);
 }
 
+//--------------------------------------------------------------------------
+// اجرای ساکت یک تنظیم، فقط برای جدول مقایسه
+struct Summary { int n=0, win=0; double R=0; };
+
+static Summary RunQuiet()
+{
+   g_all.clear();
+   g_quiet = true;
+
+   Report("H1  <->  M5", "data/GOH_XAUUSD_H1.csv", PERIOD_H1,
+          "data/GOH_XAUUSD_M5.csv", PERIOD_M5);
+   Report("H4  <->  M15", "data/GOH_XAUUSD_H4.csv", PERIOD_H4,
+          "data/GOH_XAUUSD_M15.csv", PERIOD_M15);
+
+   g_quiet = false;
+
+   Summary s;
+   for(size_t i = 0; i < g_all.size(); i++)
+   {
+      s.n++;
+      if(g_all[i].tr.hitTP2) s.win++;
+      s.R += g_all[i].tr.rTP2;
+   }
+   return s;
+}
+
+static void Matrix()
+{
+   printf("\n\n================================================================\n");
+   printf(" اثر دو قاعده جدید — همه ترکیب ها\n");
+   printf("================================================================\n");
+   printf("  (R بر مبنای بستن کل حجم روی TP2)\n\n");
+   printf("  %-14s %-10s %7s %6s %8s %10s %12s\n",
+          "بادی سیگنال", "RR هدف", "معامله", "برد", "نرخ برد", "R کل", "R هر معامله");
+
+   double bodies[] = { 0.0, 40.0, 50.0, 60.0, 70.0 };
+   double rrs[]    = { 0.0, 2.0, 3.0, 4.0 };
+
+   for(int b = 0; b < 5; b++)
+   {
+      for(int r = 0; r < 4; r++)
+      {
+         g_cfg = Cfg();
+         g_cfg.sigMinBodyPct = bodies[b];
+         g_cfg.targetRR      = rrs[r];
+
+         Summary s = RunQuiet();
+
+         char bl[32], rl[32];
+         if(bodies[b] <= 0) snprintf(bl, sizeof(bl), "خاموش");
+         else               snprintf(bl, sizeof(bl), ">= %.0f%%", bodies[b]);
+         if(rrs[r] <= 0)    snprintf(rl, sizeof(rl), "کلوز");
+         else               snprintf(rl, sizeof(rl), "1:%.0f", rrs[r]);
+
+         printf("  %-14s %-10s %7d %6d %7.0f%% %+10.2f %+12.2f\n",
+                bl, rl, s.n, s.win,
+                s.n ? 100.0 * s.win / s.n : 0.0, s.R,
+                s.n ? s.R / s.n : 0.0);
+      }
+      printf("\n");
+   }
+}
+
 int main()
 {
    printf("بک تست سیستم دو معامله ای فراکتالی — XAUUSD\n");
    printf("فرض ها: ورود روی کلوز کندل تایید | استاپ روی خود D بدون حاشیه |\n");
    printf("        بدون اسپرد و اسلیپیج | استاپ قبل از TP در کندل مشترک\n");
+
+   Matrix();
+
+   // اجرای پرگزارش با تنظیم انتخاب شده
+   g_cfg = Cfg();
+   g_cfg.sigMinBodyPct = SHOW_BODY;
+   g_cfg.targetRR      = SHOW_RR;
+   g_all.clear();
+
+   printf("\n\n################################################################\n");
+   printf(" گزارش کامل با تنظیم:  بادی سیگنال >= %.0f%%   |   RR هدف 1:%.0f\n",
+          SHOW_BODY, SHOW_RR);
+   printf("################################################################\n");
 
    Report("H1  <->  M5", "data/GOH_XAUUSD_H1.csv", PERIOD_H1,
           "data/GOH_XAUUSD_M5.csv", PERIOD_M5);
