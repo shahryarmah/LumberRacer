@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
-//|                                            GOD_OF_HUNT_BT.mq5   v1.02   |
+//|                                            GOD_OF_HUNT_BT.mq5   v1.03   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "1.02"
+#property version   "1.03"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
@@ -1460,12 +1460,19 @@ void ProcessIndicator()
    color drawColor = GetCategoryColor(cat);
    int   tfSecs    = PeriodSeconds(tf);
 
+   // شمارش الگوهای داخل بازه، مستقل از رسم.
+   //
+   // قبلا شمارش IB و TICK داخل بلوک fullRedraw بود، پس فقط در اولین اجرا
+   // درست بود و از تیک بعدی تایمر — که بازترسیم کامل لازم ندارد — صفر
+   // می‌شد، در حالی که الگوها روی چارت بودند.
    btDrawn = 0;
+   for(int c = 0; c < nKept; c++) if(InBtRange(kept[c].timeA))      btDrawn++;
+   for(int c = 0; c < nIB;   c++) if(InBtRange(ibs[c].timeChild))   btDrawn++;
+   for(int c = 0; c < nTK;   c++) if(InBtRange(tks[c].timeSignal))  btDrawn++;
 
    for(int k = 0; k < nKept; k++)
    {
       if(!InBtRange(kept[k].timeA)) continue;
-      btDrawn++;
 
       bool isDead = (kept[k].state == AB_INVALID || kept[k].state == AB_DONE);
 
@@ -1483,7 +1490,6 @@ void ProcessIndicator()
       for(int k = 0; k < nIB; k++)
       {
          if(!InBtRange(ibs[k].timeChild)) continue;
-         btDrawn++;
 
          DrawInsideBar(ibs[k], cat, tf, tfSecs, drawColor);
 
@@ -1496,7 +1502,6 @@ void ProcessIndicator()
       for(int k = 0; k < nTK; k++)
       {
          if(!InBtRange(tks[k].timeSignal)) continue;
-         btDrawn++;
 
          DrawTickFractal(tks[k], cat, tf, drawColor);
 
