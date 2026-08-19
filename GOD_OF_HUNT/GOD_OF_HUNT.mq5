@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
-//|                                            GOD_OF_HUNT.mq5   v1.14   |
+//|                                            GOD_OF_HUNT.mq5   v1.15   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "1.14"
+#property version   "1.15"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
@@ -1410,6 +1410,12 @@ void ProcessIndicator()
 }
 
 //+------------------------------------------------------------------+
+// آخرین کندلی که در OnCalculate پردازش شد. عمدا از lastBarTime جداست:
+// آن یکی داخل ProcessIndicator تصمیم «بازترسیم کامل» را می‌گیرد و اگر
+// همان استفاده شود، اجرای تایمر شمارنده را جلو می‌برد و کندل جدید از
+// دید OnCalculate گم می‌شود.
+datetime lastTickBar = 0;
+
 int OnCalculate(const int rates_total,
                 const int prev_calculated,
                 const datetime &time[],
@@ -1421,7 +1427,27 @@ int OnCalculate(const int rates_total,
                 const long &volume[],
                 const int &spread[])
 {
-   ProcessIndicator();
+   // OnCalculate روی هر تیک بازار صدا زده می‌شود — روی XAUUSD در ساعات شلوغ
+   // ۲۰ تا ۵۰ بار در ثانیه. هر اجرای کامل ProcessIndicator صدها فراخوانی
+   // آبجکت به چارت می‌فرستد، و چون اندیکاتور روی *همان* تردی اجرا می‌شود که
+   // چارت قیمت را با آن به‌روز می‌کند، آن ترد بلاک می‌شود. خود متاتریدر این
+   // را گزارش کرد: «indicator is too slow, 3062 ms».
+   //
+   // بازترسیم دوره‌ای کار OnTimer است (هر ثانیه). اینجا فقط دو حالت فوری
+   // می‌ماند که نباید تا تیک بعدی تایمر صبر کنند:
+   //   ۱. باز شدن کندل جدید
+   //   ۲. بازترسیمی که جای دیگری درخواست شده (تعویض تایم فریم، دکمه ها)
+   //
+   // اگر تاریخچه هنوز آماده نباشد iTime صفر می‌دهد و اجرا رد می‌شود؛ تایمر
+   // هر ثانیه دوباره تلاش می‌کند، پس چیزی از دست نمی‌رود.
+   datetime curBar = iTime(_Symbol, _Period, 0);
+
+   if(forceRedraw || curBar != lastTickBar)
+   {
+      lastTickBar = curBar;
+      ProcessIndicator();
+   }
+
    return(rates_total);
 }
 

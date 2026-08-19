@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
-//|                                            GOD_OF_HUNT_BT.mq5   v1.04   |
+//|                                            GOD_OF_HUNT_BT.mq5   v1.05   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "1.04"
+#property version   "1.05"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
@@ -1536,6 +1536,12 @@ void ProcessIndicator()
 }
 
 //+------------------------------------------------------------------+
+// آخرین کندلی که در OnCalculate پردازش شد. عمدا از lastBarTime جداست:
+// آن یکی داخل ProcessIndicator تصمیم «بازترسیم کامل» را می‌گیرد و اگر
+// همان استفاده شود، اجرای تایمر شمارنده را جلو می‌برد و کندل جدید از
+// دید OnCalculate گم می‌شود.
+datetime lastTickBar = 0;
+
 int OnCalculate(const int rates_total,
                 const int prev_calculated,
                 const datetime &time[],
@@ -1547,7 +1553,21 @@ int OnCalculate(const int rates_total,
                 const long &volume[],
                 const int &spread[])
 {
-   ProcessIndicator();
+   // مثل نسخهٔ اصلی: اجرای کامل روی هر تیک، ترد چارت را بلاک می‌کند و
+   // متاتریدر «indicator is too slow» می‌دهد. اینجا حتی مهم‌تر است، چون
+   // نسخهٔ بک‌تست یک بازهٔ تاریخی کامل را رسم می‌کند و آبجکت هایش به مراتب
+   // بیشتر از نسخهٔ زنده است.
+   //
+   // بازترسیم دوره‌ای کار OnTimer است. اینجا فقط کندل جدید و بازترسیم
+   // درخواست شده می‌ماند.
+   datetime curBar = iTime(_Symbol, _Period, 0);
+
+   if(forceRedraw || curBar != lastTickBar)
+   {
+      lastTickBar = curBar;
+      ProcessIndicator();
+   }
+
    return(rates_total);
 }
 
