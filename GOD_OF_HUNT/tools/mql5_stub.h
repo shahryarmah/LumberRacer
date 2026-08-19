@@ -52,7 +52,6 @@ template<typename T> T MathMax(T a, T b) { return a > b ? a : b; }
 
 template<typename T, std::size_t N> int ArraySize(T (&)[N]) { return (int)N; }
 template<typename T> int  ArrayResize(T *, int size, int = 0) { return size; }
-template<typename T> bool ArraySort(T *) { return true; }
 template<typename T> bool ArraySetAsSeries(T *, bool) { return true; }
 
 static string IntegerToString(long long v, int = 0, int = 0) { return std::to_string(v); }
