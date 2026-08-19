@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
-//|                                            GOD_OF_HUNT_BT.mq5   v1.03   |
+//|                                            GOD_OF_HUNT_BT.mq5   v1.04   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "1.03"
+#property version   "1.04"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
@@ -51,6 +51,19 @@ input group "=== بازه بک تست ==="
 // BtTo برابر صفر یعنی «تا آخرین کندل».
 input datetime BtFrom = D'2026.01.01 00:00';  // شروع بازه
 input datetime BtTo   = 0;                    // پایان بازه (0 = تا انتها)
+
+// --- سقف ایمنی. اینها برای درست بودن نتیجه نیستند، برای زنده ماندن
+// متاتریدر اند.
+//
+// هر الگو چند آبجکت گرافیکی می‌سازد (AB حدود ۸ تا، IB پنج تا، TICK سه تا).
+// روی تایم فریم پایین یک بازه چندماهه هزاران الگو دارد و ده ها هزار آبجکت
+// می‌سازد؛ متاتریدر با این تعداد آبجکت عملا قفل می‌کند. سنجش روی M5:
+// ۲۰ هزار کندل ≈ ۳۹۰۰ الگو ≈ ۲۱ هزار آبجکت.
+//
+// اگر تعداد از سقف بیشتر شد، *تازه ترین* الگوها رسم می‌شوند و برچسب
+// می‌گوید چند تا از چند تا. برای دیدن بقیه بازه را کوچکتر کنید.
+input int      BtMaxPatterns = 200;    // سقف الگوی رسم شده
+input int      BtMaxBars     = 20000;  // سقف کندل بار شده
 
 //==================== عمومی — مشترک بین هر سه الگو ====================
 input group "=== عمومی (هر سه الگو) ==="
@@ -154,6 +167,7 @@ bool isEntryListOpen     = false;
 datetime btLoadFrom = 0, btLoadTo = 0;
 int      btLoadBars = 0;
 int      btDrawn    = 0;
+int      btInRange  = 0;
 
 // کنترل بازترسیم
 datetime lastBarTime       = 0;
@@ -1316,7 +1330,8 @@ void UpdateBtInfo()
       txt = "BT " + TimeToString(BtFrom, TIME_DATE) +
             " .. " + (BtTo > 0 ? TimeToString(BtTo, TIME_DATE) : "now") +
             "   بار شده " + IntegerToString(btLoadBars) + " کندل" +
-            "   رسم " + IntegerToString(btDrawn) + " الگو";
+            "   رسم " + IntegerToString(btDrawn) +
+            (btInRange > btDrawn ? " از " + IntegerToString(btInRange) : "") + " الگو";
 
    ObjectSetInteger(0, name, OBJPROP_COLOR, btLoadBars > 0 ? clrSilver : clrTomato);
    ObjectSetString(0, name, OBJPROP_TEXT, txt);
@@ -1354,6 +1369,7 @@ bool InBtRange(datetime t)
 void BtDataRange(ENUM_TIMEFRAMES tf, datetime &fromT, datetime &toT)
 {
    long secs = (long)PeriodSeconds(tf);
+   if(secs <= 0) secs = 60;
 
    long warmBars = MaxABSpan + MaxCandles + 20;
    long tailBars = (MaxRetraceBars > 0 ? MaxRetraceBars : 100) + 50;
@@ -1362,11 +1378,29 @@ void BtDataRange(ENUM_TIMEFRAMES tf, datetime &fromT, datetime &toT)
 
    if(BtTo > 0) toT = (datetime)((long)BtTo + tailBars * secs * 2);
    else         toT = TimeCurrent();
+
+   // سقف کندل: بازه ای که از این بیشتر شود از سمت *قدیمی* بریده می‌شود، تا
+   // انتهای بازه که معمولا مهم تر است سر جایش بماند.
+   if(BtMaxBars > 0)
+   {
+      long span = (long)toT - (long)fromT;
+      long cap  = (long)BtMaxBars * secs;
+      if(span > cap) fromT = (datetime)((long)toT - cap);
+   }
 }
 
 //+------------------------------------------------------------------+
 void ProcessIndicator()
 {
+   // --- خروج زودهنگام.
+   //
+   // در بک تست داده تاریخی ثابت است: تا کندل جدیدی نیامده و چیزی عوض نشده،
+   // نه تشخیص لازم است نه پاکسازی. بدون این، هر ثانیه کل آبجکت های چارت
+   // پیمایش و نامشان پارس می‌شد — با هزاران آبجکت همین به تنهایی چارت را
+   // قفل می‌کند.
+   if(!forceRedraw && lastBarTime != 0 && iTime(_Symbol, _Period, 0) == lastBarTime)
+      return;
+
    CheckTFChangeAndDelete();
    DeleteStaleTFObjects();
 
@@ -1465,14 +1499,46 @@ void ProcessIndicator()
    // قبلا شمارش IB و TICK داخل بلوک fullRedraw بود، پس فقط در اولین اجرا
    // درست بود و از تیک بعدی تایمر — که بازترسیم کامل لازم ندارد — صفر
    // می‌شد، در حالی که الگوها روی چارت بودند.
+   btInRange = 0;
+   for(int c = 0; c < nKept; c++) if(InBtRange(kept[c].timeA))      btInRange++;
+   for(int c = 0; c < nIB;   c++) if(InBtRange(ibs[c].timeChild))   btInRange++;
+   for(int c = 0; c < nTK;   c++) if(InBtRange(tks[c].timeSignal))  btInRange++;
+
+   // --- سقف تعداد الگو.
+   //
+   // اگر بیشتر از سقف باشد، زمانِ الگوی «سقفـ اُمین از آخر» به عنوان مرز
+   // گرفته می‌شود و فقط تازه تر از آن رسم می‌شود. اینطور برش همیشه از
+   // قدیمی ترین هاست و ترتیب زمانی هم به هم نمی‌خورد.
+   datetime btCut = 0;
+
+   if(BtMaxPatterns > 0 && btInRange > BtMaxPatterns)
+   {
+      long times[];
+      ArrayResize(times, btInRange);
+      int nt = 0;
+
+      for(int c = 0; c < nKept; c++)
+         if(InBtRange(kept[c].timeA))     times[nt++] = (long)kept[c].timeA;
+      for(int c = 0; c < nIB; c++)
+         if(InBtRange(ibs[c].timeChild))  times[nt++] = (long)ibs[c].timeChild;
+      for(int c = 0; c < nTK; c++)
+         if(InBtRange(tks[c].timeSignal)) times[nt++] = (long)tks[c].timeSignal;
+
+      ArraySort(times);                       // صعودی
+      btCut = (datetime)times[nt - BtMaxPatterns];
+   }
+
    btDrawn = 0;
-   for(int c = 0; c < nKept; c++) if(InBtRange(kept[c].timeA))      btDrawn++;
-   for(int c = 0; c < nIB;   c++) if(InBtRange(ibs[c].timeChild))   btDrawn++;
-   for(int c = 0; c < nTK;   c++) if(InBtRange(tks[c].timeSignal))  btDrawn++;
+   for(int c = 0; c < nKept; c++)
+      if(InBtRange(kept[c].timeA)     && kept[c].timeA     >= btCut) btDrawn++;
+   for(int c = 0; c < nIB; c++)
+      if(InBtRange(ibs[c].timeChild)  && ibs[c].timeChild  >= btCut) btDrawn++;
+   for(int c = 0; c < nTK; c++)
+      if(InBtRange(tks[c].timeSignal) && tks[c].timeSignal >= btCut) btDrawn++;
 
    for(int k = 0; k < nKept; k++)
    {
-      if(!InBtRange(kept[k].timeA)) continue;
+      if(!InBtRange(kept[k].timeA) || kept[k].timeA < btCut) continue;
 
       bool isDead = (kept[k].state == AB_INVALID || kept[k].state == AB_DONE);
 
@@ -1489,7 +1555,7 @@ void ProcessIndicator()
    {
       for(int k = 0; k < nIB; k++)
       {
-         if(!InBtRange(ibs[k].timeChild)) continue;
+         if(!InBtRange(ibs[k].timeChild) || ibs[k].timeChild < btCut) continue;
 
          DrawInsideBar(ibs[k], cat, tf, tfSecs, drawColor);
 
@@ -1501,7 +1567,7 @@ void ProcessIndicator()
 
       for(int k = 0; k < nTK; k++)
       {
-         if(!InBtRange(tks[k].timeSignal)) continue;
+         if(!InBtRange(tks[k].timeSignal) || tks[k].timeSignal < btCut) continue;
 
          DrawTickFractal(tks[k], cat, tf, drawColor);
 
