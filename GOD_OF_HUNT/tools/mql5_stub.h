@@ -47,6 +47,7 @@ static int    _Period = PERIOD_H4;
 static int    _Digits = 5;
 
 template<typename T> T MathAbs(T v) { return v < 0 ? -v : v; }
+static double MathRound(double v) { return (v < 0) ? -std::floor(-v + 0.5) : std::floor(v + 0.5); }
 template<typename T> T MathMin(T a, T b) { return a < b ? a : b; }
 template<typename T> T MathMax(T a, T b) { return a > b ? a : b; }
 
@@ -125,6 +126,10 @@ static void FileClose(int) {}
 static int  GetLastError() { return 0; }
 static long SymbolInfoInteger(const string &, int) { return 0; }
 enum { SYMBOL_DIGITS = 0 };
+
+// DPI مانیتور، برای بزرگنمایی پنل
+enum { TERMINAL_SCREEN_DPI = 1 };
+static long TerminalInfoInteger(int) { return 96; }
 
 static int    SymbolsTotal(bool)           { return 0; }
 static string SymbolName(int, bool)        { return ""; }

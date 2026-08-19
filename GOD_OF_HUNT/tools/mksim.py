@@ -21,7 +21,18 @@ def clean(text):
         out.append(line)
     return "\n".join(out)
 
-text = clean(SRC.read_text(encoding="utf-8"))
+def strip_ui_layout(text):
+    """Drop the panel-sizing block. It is pure MetaTrader UI (screen DPI, button
+    geometry) and has no bearing on detection, so the simulator neither needs it
+    nor has the terminal calls it depends on."""
+    begin, end = "//<<< UI-LAYOUT-BEGIN", "//>>> UI-LAYOUT-END"
+    if begin not in text:
+        return text
+    head, rest = text.split(begin, 1)
+    _, tail = rest.split(end, 1)
+    return head + tail
+
+text = clean(strip_ui_layout(SRC.read_text(encoding="utf-8")))
 
 # tunables stay writable so the sim can isolate one rule at a time
 for name in ("MaxPatternDays", "RetraceMaxPercent", "RetraceMinPercent",

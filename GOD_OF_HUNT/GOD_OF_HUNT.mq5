@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
-//|                                            GOD_OF_HUNT.mq5   v1.13   |
+//|                                            GOD_OF_HUNT.mq5   v1.14   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "1.13"
+#property version   "1.14"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
@@ -332,10 +332,10 @@ void ShowTFList(TFCategory cat, int x, int y)
 
       ObjectSetInteger(0, btnName, OBJPROP_CORNER, CORNER_LEFT_UPPER);
       ObjectSetInteger(0, btnName, OBJPROP_XDISTANCE, x);
-      ObjectSetInteger(0, btnName, OBJPROP_YDISTANCE, y + 25 * i);
-      ObjectSetInteger(0, btnName, OBJPROP_XSIZE, 120);
-      ObjectSetInteger(0, btnName, OBJPROP_YSIZE, 20);
-      ObjectSetInteger(0, btnName, OBJPROP_FONTSIZE, 9);
+      ObjectSetInteger(0, btnName, OBJPROP_YDISTANCE, y + UiPx(UI_LIST_ROW) * i);
+      ObjectSetInteger(0, btnName, OBJPROP_XSIZE, UiPx(UI_BTN_W));
+      ObjectSetInteger(0, btnName, OBJPROP_YSIZE, UiPx(UI_BTN_H));
+      ObjectSetInteger(0, btnName, OBJPROP_FONTSIZE, UI_FONT_BTN);
       ObjectSetInteger(0, btnName, OBJPROP_COLOR, clrWhite);
       ObjectSetInteger(0, btnName, OBJPROP_BGCOLOR, clrDodgerBlue);
       ObjectSetInteger(0, btnName, OBJPROP_BORDER_TYPE, BORDER_FLAT);
@@ -405,9 +405,9 @@ void CreateTFButton(string name, int x, int y, string text)
    ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
    ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
    ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
-   ObjectSetInteger(0, name, OBJPROP_XSIZE, 120);
-   ObjectSetInteger(0, name, OBJPROP_YSIZE, 20);
-   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, 9);
+   ObjectSetInteger(0, name, OBJPROP_XSIZE, UiPx(UI_BTN_W));
+   ObjectSetInteger(0, name, OBJPROP_YSIZE, UiPx(UI_BTN_H));
+   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, UI_FONT_BTN);
    ObjectSetInteger(0, name, OBJPROP_COLOR, clrWhite);
    ObjectSetInteger(0, name, OBJPROP_BGCOLOR, clrDodgerBlue);
    ObjectSetInteger(0, name, OBJPROP_BORDER_TYPE, BORDER_FLAT);
@@ -431,13 +431,16 @@ void DrawPatternButton(int p)
    {
       ObjectCreate(0, name, OBJ_BUTTON, 0, 0, 0);
       ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
-      ObjectSetInteger(0, name, OBJPROP_XDISTANCE, 10);
-      ObjectSetInteger(0, name, OBJPROP_YDISTANCE, 100 + 30 * p);
-      ObjectSetInteger(0, name, OBJPROP_XSIZE, 120);
-      ObjectSetInteger(0, name, OBJPROP_YSIZE, 20);
-      ObjectSetInteger(0, name, OBJPROP_FONTSIZE, 9);
       ObjectSetInteger(0, name, OBJPROP_BORDER_TYPE, BORDER_FLAT);
    }
+
+   // هندسه بیرون از بلوک ساخت است تا با عوض شدن مانیتور یا UIScalePercent،
+   // دکمه ای که از قبل روی چارت مانده هم جابه‌جا و هم‌اندازه شود.
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, UiPanelX());
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, UiBtnY(3 + p));
+   ObjectSetInteger(0, name, OBJPROP_XSIZE, UiPx(UI_BTN_W));
+   ObjectSetInteger(0, name, OBJPROP_YSIZE, UiPx(UI_BTN_H));
+   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, UI_FONT_BTN);
 
    ObjectSetInteger(0, name, OBJPROP_STATE, false);
    ObjectSetInteger(0, name, OBJPROP_BGCOLOR, patternOn[p] ? clrSeaGreen : clrDimGray);
@@ -510,12 +513,13 @@ void UpdateCandleTimer()
    {
       ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
       ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
-      ObjectSetInteger(0, name, OBJPROP_XDISTANCE, 10);
-      ObjectSetInteger(0, name, OBJPROP_YDISTANCE, 190);
-      ObjectSetInteger(0, name, OBJPROP_FONTSIZE, 11);
       ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
    }
 
+   // ردیف ۰ از ردیف های متنی، درست زیر شش دکمه
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, UiPanelX());
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, UiTextY(0));
+   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, UI_FONT_BIG);
    ObjectSetInteger(0, name, OBJPROP_COLOR, CandleTimerColor);
    ObjectSetString(0, name, OBJPROP_TEXT, TFToStr((ENUM_TIMEFRAMES)Period()) + "  " + txt);
 }
@@ -539,13 +543,13 @@ void UpdateFractalTFLabel()
    {
       ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
       ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
-      ObjectSetInteger(0, name, OBJPROP_XDISTANCE, 10);
-      // تایمر روی 190 با فونت 11 است، پس یک خط پایین تر
-      ObjectSetInteger(0, name, OBJPROP_YDISTANCE, 208);
-      ObjectSetInteger(0, name, OBJPROP_FONTSIZE, 10);
       ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
    }
 
+   // یک ردیف زیر تایمر کندل
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, UiPanelX());
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, UiTextY(1));
+   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, UI_FONT_TXT);
    ObjectSetInteger(0, name, OBJPROP_COLOR, FractalTFColor);
    ObjectSetString(0, name, OBJPROP_TEXT, "F: " + frac);
 }
@@ -639,13 +643,13 @@ void UpdateSessionLabel()
    {
       ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
       ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
-      ObjectSetInteger(0, name, OBJPROP_XDISTANCE, 10);
-      // تایمر 190، فراکتال 208، سشن یک خط پایین تر
-      ObjectSetInteger(0, name, OBJPROP_YDISTANCE, 224);
-      ObjectSetInteger(0, name, OBJPROP_FONTSIZE, 10);
       ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
    }
 
+   // دو ردیف زیر تایمر کندل
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, UiPanelX());
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, UiTextY(2));
+   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, UI_FONT_TXT);
    ObjectSetInteger(0, name, OBJPROP_COLOR, SessionColor);
    ObjectSetString(0, name, OBJPROP_TEXT, txt);
 }
@@ -691,9 +695,9 @@ int OnInit()
    prevEntryTF     = EntryTF;
 
 
-   CreateTFButton("GOH_BtnStructure_" + chartIDStr, 10, 10, "STRUCT: " + TFToStr(StructureTF));
-   CreateTFButton("GOH_BtnTrigger_"   + chartIDStr, 10, 40, "TRIG: "   + TFToStr(TriggerTF));
-   CreateTFButton("GOH_BtnEntry_"     + chartIDStr, 10, 70, "ENTRY: "  + TFToStr(EntryTF));
+   CreateTFButton("GOH_BtnStructure_" + chartIDStr, UiPanelX(), UiBtnY(0), "STRUCT: " + TFToStr(StructureTF));
+   CreateTFButton("GOH_BtnTrigger_"   + chartIDStr, UiPanelX(), UiBtnY(1), "TRIG: "   + TFToStr(TriggerTF));
+   CreateTFButton("GOH_BtnEntry_"     + chartIDStr, UiPanelX(), UiBtnY(2), "ENTRY: "  + TFToStr(EntryTF));
    DrawPatternButtons();
 
    lastBarTime      = 0;
@@ -808,7 +812,7 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
       if(sparam == btnStructName)
       {
          if(currentListCategory != STRUCTURE) HideTFList(currentListCategory);
-         if(!isStructureListOpen) ShowTFList(STRUCTURE, 140, 10);
+         if(!isStructureListOpen) ShowTFList(STRUCTURE, UiListX(), UiBtnY(0));
          isStructureListOpen = true;
          isTriggerListOpen   = false;
          isEntryListOpen     = false;
@@ -817,7 +821,7 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
       else if(sparam == btnTrigName)
       {
          if(currentListCategory != TRIGGER) HideTFList(currentListCategory);
-         if(!isTriggerListOpen) ShowTFList(TRIGGER, 140, 10);
+         if(!isTriggerListOpen) ShowTFList(TRIGGER, UiListX(), UiBtnY(0));
          isTriggerListOpen   = true;
          isStructureListOpen = false;
          isEntryListOpen     = false;
@@ -826,7 +830,7 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
       else if(sparam == btnEntryName)
       {
          if(currentListCategory != ENTRY) HideTFList(currentListCategory);
-         if(!isEntryListOpen) ShowTFList(ENTRY, 140, 10);
+         if(!isEntryListOpen) ShowTFList(ENTRY, UiListX(), UiBtnY(0));
          isEntryListOpen     = true;
          isStructureListOpen = false;
          isTriggerListOpen   = false;

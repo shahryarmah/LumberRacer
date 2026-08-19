@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                                     GOD_OF_HUNT_Scanner.mq5   v1.13   |
+//|                                     GOD_OF_HUNT_Scanner.mq5   v1.14   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
@@ -17,7 +17,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "1.13"
+#property version   "1.14"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
@@ -259,13 +259,16 @@ void DrawScanPatternButton(int p)
    {
       ObjectCreate(0, name, OBJ_BUTTON, 0, 0, 0);
       ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
-      ObjectSetInteger(0, name, OBJPROP_XDISTANCE, 10);
-      ObjectSetInteger(0, name, OBJPROP_YDISTANCE, 10 + 30 * p);
-      ObjectSetInteger(0, name, OBJPROP_XSIZE, 120);
-      ObjectSetInteger(0, name, OBJPROP_YSIZE, 20);
-      ObjectSetInteger(0, name, OBJPROP_FONTSIZE, 9);
       ObjectSetInteger(0, name, OBJPROP_BORDER_TYPE, BORDER_FLAT);
    }
+
+   // هندسه بیرون از بلوک ساخت است تا با عوض شدن مانیتور یا UIScalePercent،
+   // دکمه ای که از قبل روی چارت مانده هم جابه‌جا و هم‌اندازه شود.
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, UiPanelX());
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, UiBtnY(p));
+   ObjectSetInteger(0, name, OBJPROP_XSIZE, UiPx(UI_BTN_W));
+   ObjectSetInteger(0, name, OBJPROP_YSIZE, UiPx(UI_BTN_H));
+   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, UI_FONT_BTN);
 
    ObjectSetInteger(0, name, OBJPROP_STATE, false);
    ObjectSetInteger(0, name, OBJPROP_BGCOLOR, patScan[p] ? clrSeaGreen : clrDimGray);
@@ -353,12 +356,21 @@ void WritePatternsToHunterCharts()
 // برای گوشه راست از CORNER_RIGHT_UPPER استفاده نمی‌کنیم، چون آن حالت جهت
 // انکر متن ها را برعکس می‌کند و ستون های هم عرض به هم می‌ریزند. به جایش
 // مختصات چپ را از عرض چارت حساب می‌کنیم و همه چیز از گوشه بالا چپ می‌ماند.
+// ارتفاع یک ردیف جدول. فونت با DPI مانیتور بزرگ می‌شود ولی مختصات پیکسلی
+// نه، پس فاصله ردیف ها هم باید با همان ضریب بزرگ شود وگرنه روی هم می‌افتند.
+int PanelRowH()
+{
+   int h = UiPx(PanelFontSize + 7);
+   if(h <= 0) h = UiPx(16);
+   return h;
+}
+
 int PanelLeftX()
 {
-   if(PanelCorner == PANEL_TOP_LEFT) return PanelX;
+   if(PanelCorner == PANEL_TOP_LEFT) return UiPx(PanelX);
 
    int chartW = (int)ChartGetInteger(0, CHART_WIDTH_IN_PIXELS);
-   int x = chartW - PanelWidth - PanelX;
+   int x = chartW - UiPx(PanelWidth) - UiPx(PanelX);
    if(x < 0) x = 0;
    return x;
 }
@@ -367,10 +379,9 @@ int PanelLeftX()
 int MaxRowsThatFit()
 {
    int chartH = (int)ChartGetInteger(0, CHART_HEIGHT_IN_PIXELS);
-   int rowH   = PanelFontSize + 7;
-   if(rowH <= 0) rowH = 16;
+   int rowH   = PanelRowH();
 
-   int fits = (chartH - PanelY - 24) / rowH;
+   int fits = (chartH - UiPx(PanelY) - UiPx(24)) / rowH;
    if(fits < 5) fits = 5;
    return fits;
 }
@@ -727,11 +738,11 @@ void EnsurePanelBackground()
 void SizePanelBackground(int rows)
 {
    string name = objPrefix + "BG";
-   int height = rows * (PanelFontSize + 7) + 14;
-   int width  = PanelWidth;
+   int height = rows * PanelRowH() + UiPx(14);
+   int width  = UiPx(PanelWidth);
 
-   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, panelLeft - 6);
-   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, PanelY - 6);
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, panelLeft - UiPx(6));
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, UiPx(PanelY) - UiPx(6));
    ObjectSetInteger(0, name, OBJPROP_XSIZE, width);
    ObjectSetInteger(0, name, OBJPROP_YSIZE, height);
    ObjectSetInteger(0, name, OBJPROP_BGCOLOR, PanelBackColor);
@@ -751,7 +762,7 @@ void PanelRow(int row, string text, color clr)
    }
 
    ObjectSetInteger(0, name, OBJPROP_XDISTANCE, panelLeft);
-   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, PanelY + row * (PanelFontSize + 7));
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, UiPx(PanelY) + row * PanelRowH());
    ObjectSetInteger(0, name, OBJPROP_FONTSIZE, PanelFontSize);
    ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
    ObjectSetString(0, name, OBJPROP_TEXT, text);
