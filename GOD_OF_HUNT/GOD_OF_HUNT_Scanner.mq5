@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                                     GOD_OF_HUNT_Scanner.mq5   v1.14   |
+//|                                     GOD_OF_HUNT_Scanner.mq5   v1.13   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
@@ -17,7 +17,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "1.14"
+#property version   "1.13"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
@@ -198,16 +198,12 @@ bool patScan[PATTERN_COUNT];
 // می‌ماند. با فاصله عادی اسکن (RefreshSeconds) یعنی یک دقیقه نگاه کردن به
 // لیست خالی. تا وقتی داده ناقص است اسکن هر ScanRetrySeconds ثانیه تکرار
 // می‌شود، و به محض کامل شدن به فاصله عادی برمی‌گردد.
-// فاصله اولین تلاش سریع؛ بعد از آن هر بار دو برابر می‌شود تا به
-// RefreshSeconds برسد. فاصله ثابت کوتاه روی ترمینال تازه — که هیچ تاریخچه ای
-// ندارد — یعنی صدها درخواست دانلود پشت سر هم، و همان ترمینال را قفل می‌کند.
-#define SCAN_RETRY_SECONDS 5
-#define SCAN_RETRY_MAX     8    // سقف تلاش سریع
+#define SCAN_RETRY_SECONDS 3
+#define SCAN_RETRY_MAX     40   // سقف تلاش سریع، تا نمادِ واقعا بی داده حلقه نسازد
 
 bool scanDataIncomplete = false;   // در آخرین اسکن، جایی داده آماده نبود
 int  scanRetriesLeft    = SCAN_RETRY_MAX;
 int  scanPeriodNow      = 60;      // فاصله موثر همین چرخه (برای شمارش معکوس سربرگ)
-int  scanRetryStep      = 0;       // فاصله تلاش قبلی، برای عقب نشینی پله ای
 
 string ScanPatStateObjName()
 {
@@ -1230,30 +1226,6 @@ void RunScan()
             if(n < 0) scanDataIncomplete = true;
          }
 
-         // --- داده یک بار برای هر ترکیب گرفته می‌شود.
-         //
-         // قبلا وقتی AB خاموش بود، AnalyzeInsideBars و AnalyzeTickFractals
-         // هر کدام Bars و CopyRates خودشان را صدا می‌زدند — یعنی دو درخواست
-         // تاریخچه به ازای هر نماد و تایم فریم. روی ترمینال تازه که هیچ
-         // تاریخچه ای ندارد این یعنی صدها درخواست دانلود در هر اسکن.
-         bool haveRates = (n >= 0);
-
-         if(!haveRates && (patScan[PATTERN_INSIDE_BAR] || patScan[PATTERN_TICK_FRACTAL]))
-         {
-            int avail = Bars(sym, tf);
-            if(avail > MinCandles)
-            {
-               int need = ABCDHistoryBars;
-               if(need > avail) need = avail;
-
-               ArraySetAsSeries(rates, false);
-               rates_total = CopyRates(sym, tf, 0, need, rates);
-               haveRates   = (rates_total > MinCandles);
-            }
-
-            if(!haveRates) scanDataIncomplete = true;
-         }
-
          for(int k = 0; k < n; k++)
          {
             if(active[k].live) continue;   // هنوز قطعی نشده
@@ -1346,7 +1318,9 @@ void RunScan()
          if(patScan[PATTERN_INSIDE_BAR])
          {
             InsideBar ibs[];
-            int nIB = haveRates ? CollectInsideBars(rates, rates_total, ibs) : 0;
+            int nIB = (n >= 0) ? CollectInsideBars(rates, rates_total, ibs)
+                               : AnalyzeInsideBars(sym, tf, ibs);
+            if(nIB < 0) scanDataIncomplete = true;
 
             for(int k = 0; k < nIB; k++)
             {
@@ -1412,7 +1386,9 @@ void RunScan()
          if(patScan[PATTERN_TICK_FRACTAL])
          {
             TickFractal tks[];
-            int nTK = haveRates ? CollectTickFractals(rates, rates_total, tks) : 0;
+            int nTK = (n >= 0) ? CollectTickFractals(rates, rates_total, tks)
+                               : AnalyzeTickFractals(sym, tf, tks);
+            if(nTK < 0) scanDataIncomplete = true;
 
             for(int k = 0; k < nTK; k++)
             {
@@ -1500,17 +1476,10 @@ void RunScan()
    if(retrying)
    {
       scanRetriesLeft--;
-
-      // عقب نشینی پله ای: ۵، ۱۰، ۲۰، ۴۰ … تا سقف فاصله عادی
-      scanRetryStep = (scanRetryStep <= 0) ? SCAN_RETRY_SECONDS : scanRetryStep * 2;
-
-      int normal = (RefreshSeconds < 5) ? 5 : RefreshSeconds;
-      if(scanRetryStep > normal) scanRetryStep = normal;
-      scanPeriodNow = scanRetryStep;
+      scanPeriodNow = SCAN_RETRY_SECONDS;
    }
    else
    {
-      scanRetryStep = 0;
       scanPeriodNow = (RefreshSeconds < 5) ? 5 : RefreshSeconds;
    }
 
