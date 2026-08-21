@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
-//|                                            GOD_OF_HUNT_BT.mq5   v1.04   |
+//|                                            GOD_OF_HUNT_BT.mq5   v1.05   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "1.04"
+#property version   "1.05"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
@@ -159,6 +159,19 @@ int      btDrawn    = 0;
 datetime lastBarTime       = 0;
 bool     forceRedraw       = true;
 string   lastConfirmedSig  = "";
+
+// همان کاهش رفت و برگشت نسخهٔ اصلی. اینجا حتی مهم تر است، چون نسخهٔ بک‌تست
+// یک بازهٔ تاریخی کامل رسم می‌کند و آبجکت هایش بیشتر است.
+string   staleLayoutSig    = "";
+bool     hadLiveObjects    = false;
+
+string StaleLayoutSignature()
+{
+   return IntegerToString(Period())         + "/" +
+          IntegerToString((int)StructureTF) + "/" +
+          IntegerToString((int)TriggerTF)   + "/" +
+          IntegerToString((int)EntryTF);
+}
 
 //+------------------------------------------------------------------+
 TFCategory GetCategory()
@@ -732,6 +745,8 @@ int OnInit()
    lastBarTime      = 0;
    forceRedraw      = true;
    lastConfirmedSig = "";
+   staleLayoutSig   = "";
+   hadLiveObjects   = false;
 
    EventSetTimer(1);
 
@@ -1374,7 +1389,15 @@ void BtDataRange(ENUM_TIMEFRAMES tf, datetime &fromT, datetime &toT)
 void ProcessIndicator()
 {
    CheckTFChangeAndDelete();
-   DeleteStaleTFObjects();
+
+   // تصمیم DeleteStaleTFObjects فقط به تایم فریم چارت و سه تایم فریم انتخابی
+   // بستگی دارد؛ تا عوض نشده اند پیمایش کامل جدول آبجکت بی اثر است.
+   string layoutSig = StaleLayoutSignature();
+   if(forceRedraw || layoutSig != staleLayoutSig)
+   {
+      staleLayoutSig = layoutSig;
+      DeleteStaleTFObjects();
+   }
 
    TFCategory cat = GetCategory();
    if(cat == NONE) return;
@@ -1451,6 +1474,10 @@ void ProcessIndicator()
 
    bool fullRedraw = (forceRedraw || curBar != lastBarTime || sig != lastConfirmedSig);
 
+   bool liveNow = false;
+   for(int k = 0; k < nKept; k++)
+      if(kept[k].live) { liveNow = true; break; }
+
    if(fullRedraw)
    {
       DeleteObjectsOfTF(cat, tf);
@@ -1458,10 +1485,12 @@ void ProcessIndicator()
       forceRedraw      = false;
       lastConfirmedSig = sig;
    }
-   else
+   else if(liveNow || hadLiveObjects)
    {
       DeleteLiveObjectsOfTF(cat, tf);
    }
+
+   hadLiveObjects = liveNow;
 
    color drawColor = GetCategoryColor(cat);
    int   tfSecs    = PeriodSeconds(tf);

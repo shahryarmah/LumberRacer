@@ -1,19 +1,21 @@
 //+------------------------------------------------------------------+
-//|                                       GOD_OF_HUNT_DIAG.mq5   v1.14   |
-//|  نسخهٔ اندازه‌گیری. رفتارش دقیقا مثل 1.14 است، فقط زمان هر بخش را       |
+//|                                       GOD_OF_HUNT_DIAG.mq5   v1.15   |
+//|  نسخهٔ اندازه‌گیری. رفتارش دقیقا مثل 1.15 است، فقط زمان هر بخش را       |
 //|  می‌سنجد و در تب Experts می‌نویسد. برای کار روزمره استفاده نشود.        |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "1.14"
-#property description "GOD_OF_HUNT DIAG - اندازه گیری علت فریز"
+#property version   "1.15"
+#property description "GOD_OF_HUNT DIAG - اندازه گیری زمان بخش ها"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
 // قواعد تشخیص و چرخه عمر مشترک با اسکنر
 #include "GOD_OF_HUNT_Core.mqh"
+
+// این اندیکاتور فقط با آبجکت‌های گرافیکی کار می‌کند و هیچ بافری ندارد.
 
 //================== ابزار سنجش، فقط در همین نسخه ==================
 //
@@ -28,7 +30,6 @@ input group "=== تشخیص علت فریز (فقط نسخهٔ DIAG) ==="
 input bool DiagEnabled       = true;   // نوشتن گزارش در تب Experts
 input int  DiagSlowMs        = 100;    // هر اجرای کندتر از این، یک خط گزارش
 input int  DiagSummarySec    = 30;     // هر چند ثانیه یک خط خلاصه
-input bool DiagThrottleTicks = false;  // تست گام ۱: اجرای کامل فقط با کندل جدید
 
 #define DG_MAX 12
 
@@ -43,8 +44,6 @@ ulong  dgCalls = 0, dgSumUs = 0, dgWorstUs = 0, dgWorstGapUs = 0;
 string dgWorstLine = "";
 ulong  dgLastSummaryUs = 0;
 int    dgSlowCount = 0;
-
-datetime lastTickBar = 0;    // فقط وقتی DiagThrottleTicks روشن باشد
 
 void DgEnter(string who)
 {
@@ -227,6 +226,36 @@ bool isEntryListOpen     = false;
 datetime lastBarTime       = 0;
 bool     forceRedraw       = true;
 string   lastConfirmedSig  = "";
+
+//+------------------------------------------------------------------+
+// کاهش رفت و برگشت با چارت.
+//
+// هر پرسش همگام از چارت (ObjectsTotal, ObjectName, ObjectFind) گران است.
+// اندازه گیری روی دو دستگاه: حدود 0.05 میلی‌ثانیه به ازای هر آبجکت، که با
+// 270 تا 440 آبجکت یعنی 100 تا 170 میلی‌ثانیه برای هر پیمایش کامل — و وقتی
+// ویندوز روی باتری throttle می‌کند تا چند ثانیه بالا می‌رود.
+//
+// در لاگ ها detect حدود 0.1 و drawAB حدود 0.2 میلی‌ثانیه بود، یعنی ۹۷ درصد
+// وقت صرف پیمایش هایی می‌شد که هیچ چیزی عوض نمی‌کردند. این سه متغیر باعث
+// می‌شوند در حالت بیکار اصلا آن پیمایش ها انجام نشوند.
+string   staleLayoutSig    = "";     // Period + سه تایم فریم انتخابی
+bool     hadLiveObjects    = false;  // بار قبل آبجکت سویینگ زنده رسم شد؟
+double   panelScaleApplied = -1.0;   // مقیاسی که هندسهٔ لیبل ها با آن ست شده
+bool     timerLabelReady   = false;  // لیبل ساخته شده؟ به جای ObjectFind هر ثانیه
+bool     timerLabelCleared = false;  // لیبل خاموش، یک بار پاک شد
+bool     fractLabelCleared = false;
+bool     fractLabelReady   = false;
+bool     sessLabelReady    = false;
+
+// امضای چیزهایی که DeleteStaleTFObjects به آنها نگاه می‌کند. تا وقتی عوض
+// نشده اند، اجرای دوبارهٔ آن قطعا هیچ آبجکتی را حذف نمی‌کند.
+string StaleLayoutSignature()
+{
+   return IntegerToString(Period())            + "/" +
+          IntegerToString((int)StructureTF)    + "/" +
+          IntegerToString((int)TriggerTF)      + "/" +
+          IntegerToString((int)EntryTF);
+}
 
 //+------------------------------------------------------------------+
 TFCategory GetCategory()
@@ -589,7 +618,14 @@ void UpdateCandleTimer()
 
    if(!ShowCandleTimer)
    {
-      if(ObjectFind(0, name) >= 0) ObjectDelete(0, name);
+      // ObjectDelete روی آبجکت ناموجود فقط false برمی‌گرداند، پس ObjectFind
+      // لازم نیست. یک بار در هر بارگذاری کافی است.
+      if(!timerLabelCleared)
+      {
+         ObjectDelete(0, name);
+         timerLabelCleared = true;
+         timerLabelReady   = false;
+      }
       return;
    }
 
@@ -606,19 +642,26 @@ void UpdateCandleTimer()
    string txt = (hh > 0) ? StringFormat("%02d:%02d:%02d", hh, mm, ss)
                          : StringFormat("%02d:%02d", mm, ss);
 
-   if(ObjectFind(0, name) < 0)
+   // ObjectFind هر ثانیه یک پرسش همگام از چارت بود. حالا فقط یک بار.
+   if(!timerLabelReady)
    {
-      ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
+      if(ObjectFind(0, name) < 0)
+         ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
       ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
       ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+      // ردیف ۰ از ردیف های متنی، درست زیر شش دکمه
+      ObjectSetInteger(0, name, OBJPROP_XDISTANCE, UiPanelX());
+      ObjectSetInteger(0, name, OBJPROP_YDISTANCE, UiTextY(0));
+      ObjectSetInteger(0, name, OBJPROP_FONTSIZE, UI_FONT_BIG);
+      ObjectSetInteger(0, name, OBJPROP_COLOR, CandleTimerColor);
+      timerLabelReady = true;
    }
 
-   // ردیف ۰ از ردیف های متنی، درست زیر شش دکمه
-   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, UiPanelX());
-   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, UiTextY(0));
-   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, UI_FONT_BIG);
-   ObjectSetInteger(0, name, OBJPROP_COLOR, CandleTimerColor);
-   ObjectSetString(0, name, OBJPROP_TEXT, TFToStr((ENUM_TIMEFRAMES)Period()) + "  " + txt);
+   // اگر آبجکت از بیرون حذف شده باشد این false برمی‌گرداند و دفعهٔ بعد
+   // دوباره ساخته می‌شود — پس پرچم هیچ‌وقت روی وضعیت غلط گیر نمی‌کند.
+   if(!ObjectSetString(0, name, OBJPROP_TEXT,
+                       TFToStr((ENUM_TIMEFRAMES)Period()) + "  " + txt))
+      timerLabelReady = false;
 }
 
 //+------------------------------------------------------------------+
@@ -632,23 +675,31 @@ void UpdateFractalTFLabel()
 
    if(StringLen(frac) == 0)
    {
-      if(ObjectFind(0, name) >= 0) ObjectDelete(0, name);
+      if(!fractLabelCleared)
+      {
+         ObjectDelete(0, name);
+         fractLabelCleared = true;
+         fractLabelReady   = false;
+      }
       return;
    }
 
-   if(ObjectFind(0, name) < 0)
+   if(!fractLabelReady)
    {
-      ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
+      if(ObjectFind(0, name) < 0)
+         ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
       ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
       ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+      // یک ردیف زیر تایمر کندل
+      ObjectSetInteger(0, name, OBJPROP_XDISTANCE, UiPanelX());
+      ObjectSetInteger(0, name, OBJPROP_YDISTANCE, UiTextY(1));
+      ObjectSetInteger(0, name, OBJPROP_FONTSIZE, UI_FONT_TXT);
+      ObjectSetInteger(0, name, OBJPROP_COLOR, FractalTFColor);
+      fractLabelReady = true;
    }
 
-   // یک ردیف زیر تایمر کندل
-   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, UiPanelX());
-   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, UiTextY(1));
-   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, UI_FONT_TXT);
-   ObjectSetInteger(0, name, OBJPROP_COLOR, FractalTFColor);
-   ObjectSetString(0, name, OBJPROP_TEXT, "F: " + frac);
+   if(!ObjectSetString(0, name, OBJPROP_TEXT, "F: " + frac))
+      fractLabelReady = false;
 }
 
 //+------------------------------------------------------------------+
@@ -736,19 +787,22 @@ void UpdateSessionLabel()
       }
    }
 
-   if(ObjectFind(0, name) < 0)
+   if(!sessLabelReady)
    {
-      ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
+      if(ObjectFind(0, name) < 0)
+         ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
       ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
       ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+      // دو ردیف زیر تایمر کندل
+      ObjectSetInteger(0, name, OBJPROP_XDISTANCE, UiPanelX());
+      ObjectSetInteger(0, name, OBJPROP_YDISTANCE, UiTextY(2));
+      ObjectSetInteger(0, name, OBJPROP_FONTSIZE, UI_FONT_TXT);
+      ObjectSetInteger(0, name, OBJPROP_COLOR, SessionColor);
+      sessLabelReady = true;
    }
 
-   // دو ردیف زیر تایمر کندل
-   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, UiPanelX());
-   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, UiTextY(2));
-   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, UI_FONT_TXT);
-   ObjectSetInteger(0, name, OBJPROP_COLOR, SessionColor);
-   ObjectSetString(0, name, OBJPROP_TEXT, txt);
+   if(!ObjectSetString(0, name, OBJPROP_TEXT, txt))
+      sessLabelReady = false;
 }
 //+------------------------------------------------------------------+
 
@@ -801,6 +855,17 @@ int OnInitBody()
    forceRedraw      = true;
    lastConfirmedSig = "";
 
+   // OnInit با هر تعویض تایم فریم دوباره اجرا می‌شود ولی آبجکت ها روی چارت
+   // می‌مانند، پس پرچم ها صفر می‌شوند تا یک بار دوباره راستی‌آزمایی شود.
+   staleLayoutSig    = "";
+   hadLiveObjects    = false;
+   timerLabelReady   = false;
+   fractLabelReady   = false;
+   sessLabelReady    = false;
+   timerLabelCleared = false;
+   fractLabelCleared = false;
+   panelScaleApplied = UiScale();
+
    EventSetTimer(1);
 
    // آبجکت الگوی خاموش ممکن است از نصب قبلی روی چارت مانده باشد
@@ -818,16 +883,14 @@ int OnInitBody()
    return(INIT_SUCCEEDED);
 }
 
-// پوشش هندلرها: بدنه ها return های زودهنگام دارند، پس اندازه گیری بیرون
-// از آنها گذاشته شده تا هیچ مسیری از قلم نیفتد.
+// پوشش هندلرها: بدنه ها return زودهنگام دارند، پس اندازه گیری بیرونشان است.
 int OnInit()
 {
    DgEnter("init");
    int r = OnInitBody();
    if(DiagEnabled)
       Print("GOH-DIAG شروع | چارت=", TFToStr((ENUM_TIMEFRAMES)Period()),
-            "  STRUCT=", TFToStr(StructureTF),
-            "  TRIG=", TFToStr(TriggerTF),
+            "  STRUCT=", TFToStr(StructureTF), "  TRIG=", TFToStr(TriggerTF),
             "  ENTRY=", TFToStr(EntryTF),
             "  DPI=", TerminalInfoInteger(TERMINAL_SCREEN_DPI),
             "  آبجکت=", ObjectsTotal(0),
@@ -1386,7 +1449,17 @@ void ProcessIndicator()
 {
    CheckTFChangeAndDelete();
    DgLap("tfchg");
-   DeleteStaleTFObjects();
+
+   // DeleteStaleTFObjects کل جدول آبجکت ها را می‌پیماید و تصمیمش فقط به
+   // تایم فریم چارت و سه تایم فریم انتخابی بستگی دارد. تا وقتی هیچ‌کدام
+   // عوض نشده، پیمایش دوباره قطعا هیچ چیزی حذف نمی‌کند — پس انجام نمی‌شود.
+   // forceRedraw هم شامل می‌شود تا کلیک روی دکمه ها و اجرای اول جا نیفتد.
+   string layoutSig = StaleLayoutSignature();
+   if(forceRedraw || layoutSig != staleLayoutSig)
+   {
+      staleLayoutSig = layoutSig;
+      DeleteStaleTFObjects();
+   }
    DgLap("stale");
 
    TFCategory cat = GetCategory();
@@ -1461,6 +1534,11 @@ void ProcessIndicator()
 
    bool fullRedraw = (forceRedraw || curBar != lastBarTime || sig != lastConfirmedSig);
 
+   // آیا اصلا سویینگ زنده ای برای رسم داریم؟
+   bool liveNow = false;
+   for(int k = 0; k < nKept; k++)
+      if(kept[k].live) { liveNow = true; break; }
+
    if(fullRedraw)
    {
       DeleteObjectsOfTF(cat, tf);
@@ -1468,10 +1546,15 @@ void ProcessIndicator()
       forceRedraw      = false;
       lastConfirmedSig = sig;
    }
-   else
+   else if(liveNow || hadLiveObjects)
    {
+      // فقط وقتی یا الان سویینگ زنده ای هست که باید جایگزین شود، یا بار قبل
+      // بوده و حالا نیست و باید پاک شود. اگر هیچ‌وقت نبوده، این پیمایش کامل
+      // چیزی برای حذف ندارد — و در لاگ ها همین حالت رایج ترین بود.
       DeleteLiveObjectsOfTF(cat, tf);
    }
+
+   hadLiveObjects = liveNow;
    DgLap(fullRedraw ? "wipeFULL" : "wipeLive");
 
    color drawColor = GetCategoryColor(cat);
@@ -1528,6 +1611,7 @@ void ProcessIndicator()
          }
       }
    }
+
    DgLap("drawIB");
 
    ChartRedraw();
@@ -1547,21 +1631,7 @@ int OnCalculate(const int rates_total,
                 const int &spread[])
 {
    DgEnter("calc");
-
-   // DiagThrottleTicks خاموش = رفتار دقیقا مثل 1.14 (هر تیک یک اجرای کامل).
-   // روشن = همان گام ۱، تا با عدد مقایسه شود نه با حس.
-   if(!DiagThrottleTicks)
-      ProcessIndicator();
-   else
-   {
-      datetime curBar = iTime(_Symbol, _Period, 0);
-      if(forceRedraw || curBar != lastTickBar)
-      {
-         lastTickBar = curBar;
-         ProcessIndicator();
-      }
-   }
-
+   ProcessIndicator();
    DgLeave();
    return(rates_total);
 }
@@ -1570,6 +1640,19 @@ int OnCalculate(const int rates_total,
 void OnTimer()
 {
    DgEnter("timer");
+   // هندسهٔ پنل فقط موقع ساخت ست می‌شود، پس اگر پنجره به مانیتوری با DPI
+   // دیگر منتقل شود باید یک بار دوباره چیده شود. مقایسهٔ یک عدد است و هیچ
+   // پرسشی از چارت ندارد.
+   if(UiScale() != panelScaleApplied)
+   {
+      panelScaleApplied = UiScale();
+      timerLabelReady   = false;
+      fractLabelReady   = false;
+      sessLabelReady    = false;
+      DrawPatternButtons();
+      forceRedraw = true;
+   }
+
    // انتخاب الگوها ممکن است از سمت اسکنر عوض شده باشد
    if(ApplyPatternStateFromObject())
       forceRedraw = true;
