@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
-//|                                            GOD_OF_HUNT_BT.mq5   v1.16   |
+//|                                            GOD_OF_HUNT_BT.mq5   v1.17   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "1.16"
+#property version   "1.17"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
@@ -134,6 +134,7 @@ input color  SydneyLevelColor   = clrDarkGreen;
 input color  TokyoLevelColor    = clrSaddleBrown;
 input color  LondonLevelColor   = clrNavy;
 input color  NewYorkLevelColor  = clrDarkMagenta;
+input color  PatternBtnColor    = clrDarkSlateBlue; // رنگ دکمهٔ PATTERNS، جدا از دکمه های تایم فریم
 input int    LevelLineWidth     = 1;
 input bool   ShowLevelLabels    = true;            // برچسب کوتاه انتهای خط
 input ENUM_TIMEFRAMES SessionLevelsMaxTF = PERIOD_H4; // سطح سشن فقط تا این تایم فریم
@@ -221,11 +222,17 @@ void DeleteLevelGroup(string id)
 }
 
 //+------------------------------------------------------------------+
-// پنجرهٔ آخرین سشنی که *امروز* بسته شده، به وقت سرور.
-// سشنی که از دیروز شروع شده و امروز بسته می‌شود (مثل سیدنی) هم درست
-// حساب می‌شود، چون مبنا لحظهٔ بسته شدن است نه لحظهٔ باز شدن.
-// برگشتی false یعنی این سشن هنوز امروز بسته نشده.
-bool SessionWindowToday(int idx, datetime &fromSrv, datetime &toSrv)
+// پنجرهٔ سشن برای روزی که کندل روزانه اش از dayStart شروع می‌شود، به وقت سرور.
+//
+// ساعت سشن ها GMT است ولی کندل روزانه و محور زمان چارت به وقت سرور کارگزار
+// هستند. اگر مبنا را نیمه شب GMT بگیریم، روی کارگزاری که مثلا GMT+3 است
+// پنجره تا یک روز جابه‌جا می‌شود و خط سشن روی روز بعد می‌افتد. پس ساعت GMT
+// اول به «ثانیهٔ روز به وقت سرور» تبدیل می‌شود و از همان dayStart که خط
+// رویش کشیده می‌شود شمرده می‌شود.
+//
+// سشنی که از روز قبل شروع شده و در این روز بسته می‌شود (مثل سیدنی) درست
+// درمی‌آید، چون مبنا لحظهٔ بسته شدن است و fromSrv می‌تواند عقب تر برود.
+bool SessionWindowOfDay(int idx, datetime dayStart, datetime &fromSrv, datetime &toSrv)
 {
    datetime gmtNow = TimeGMT();
    if(gmtNow == 0) return false;
@@ -237,12 +244,18 @@ bool SessionWindowToday(int idx, datetime &fromSrv, datetime &toSrv)
    int durH   = (closeH - openH + 24) % 24;
    if(durH == 0) durH = 24;
 
-   datetime dayStartGmt = (datetime)((long)gmtNow - (long)gmtNow % 86400);
-   datetime closeGmt    = dayStartGmt + closeH * 3600;
-   if(closeGmt > gmtNow) return false;                // هنوز امروز بسته نشده
+   // لنگر روی *بسته شدن* سشن: سشن مال روزی است که در آن بسته می‌شود.
+   // این همان چیزی است که موقع معامله لازم است — های/لوی سشنی که همین
+   // امروز تمام شده. fromSrv می‌تواند به روز قبل برود (سیدنی) و مشکلی نیست.
+   //
+   // اگر بسته شدن دقیقا روی نیمه شب سرور بیفتد (نیویورک روی کارگزار GMT+3)
+   // باقیمانده صفر می‌شود؛ آن را انتهای همین روز می‌گیریم نه ابتدایش، وگرنه
+   // آن سشن یک روز عقب می‌افتاد.
+   long closeOfDay = ((long)closeH * 3600 - shift) % 86400;
+   if(closeOfDay <= 0) closeOfDay += 86400;
 
-   fromSrv = (datetime)((long)(closeGmt - durH * 3600) - shift);
-   toSrv   = (datetime)((long)closeGmt - shift);
+   toSrv   = (datetime)((long)dayStart + closeOfDay);
+   fromSrv = (datetime)((long)toSrv - (long)durH * 3600);
    return true;
 }
 
@@ -310,7 +323,6 @@ void UpdateLevels(bool active)
 
    bool dailyOn     = patternOn[PATTERN_DAILY_HL];
    bool sessAllowed = (Period() <= (int)SessionLevelsMaxTF);
-   long shift       = (long)TimeGMT() - (long)TimeCurrent();
 
    // d1[k] روز جاری، d1[k-1] روز قبلش
    for(int k = 1; k < nd; k++)
@@ -334,18 +346,9 @@ void UpdateLevels(bool active)
          int p = PATTERN_SESS_FIRST + i;
          if(!patternOn[p]) continue;
 
-         int openH  = SessionOpenGMT(i);
-         int closeH = SessionCloseGMT(i);
-         int durH   = (closeH - openH + 24) % 24;
-         if(durH == 0) durH = 24;
-
-         // مرز روز به وقت GMT، از روی همین کندل روزانه
-         datetime dayGmt = (datetime)((long)dayStart + shift);
-         dayGmt = (datetime)((long)dayGmt - (long)dayGmt % 86400);
-
-         datetime closeGmt = dayGmt + closeH * 3600;
-         datetime a = (datetime)((long)(closeGmt - durH * 3600) - shift);
-         datetime b = (datetime)((long)closeGmt - shift);
+         // همان پنجره ای که نسخهٔ زنده استفاده می‌کند، گره خورده به روز کارگزار
+         datetime a = 0, b = 0;
+         if(!SessionWindowOfDay(i, dayStart, a, b)) continue;
 
          double hi = 0.0, lo = 0.0;
          if(!RangeHighLow(a, b, hi, lo)) continue;
@@ -723,7 +726,7 @@ void DrawPatternHeadButton()
    ObjectSetInteger(0, name, OBJPROP_YSIZE, UiPx(UI_BTN_H));
    ObjectSetInteger(0, name, OBJPROP_FONTSIZE, UI_FONT_BTN);
    ObjectSetInteger(0, name, OBJPROP_STATE, false);
-   ObjectSetInteger(0, name, OBJPROP_BGCOLOR, clrDodgerBlue);
+   ObjectSetInteger(0, name, OBJPROP_BGCOLOR, PatternBtnColor);
    ObjectSetInteger(0, name, OBJPROP_COLOR, clrWhite);
 
    int on = 0;
@@ -1214,6 +1217,12 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
       // با کلیک روی دکمه باز شده، بلافاصله با رویداد دوم بسته می‌شود.
       if(GetMicrosecondCount() - lastObjectClickTime < 300000)   // 0.3 ثانیه
          return;
+
+      if(isPatternListOpen)
+      {
+         HidePatternList();
+         ChartRedraw();
+      }
 
       if(currentListCategory != NONE)
       {
