@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                                     GOD_OF_HUNT_Scanner.mq5   v1.15   |
+//|                                     GOD_OF_HUNT_Scanner.mq5   v1.16   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
@@ -17,7 +17,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "1.15"
+#property version   "1.16"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
@@ -224,7 +224,7 @@ void SaveScanPatState()
    }
 
    string txt = "";
-   for(int p = 0; p < PATTERN_COUNT; p++)
+   for(int p = 0; p < PATTERN_SCAN_COUNT; p++)
    {
       if(p > 0) txt += "|";
       txt += patScan[p] ? "1" : "0";
@@ -234,14 +234,14 @@ void SaveScanPatState()
 
 void LoadScanPatState()
 {
-   for(int p = 0; p < PATTERN_COUNT; p++) patScan[p] = true;
+   for(int p = 0; p < PATTERN_SCAN_COUNT; p++) patScan[p] = true;
 
    string name = ScanPatStateObjName();
    if(ObjectFind(0, name) < 0) return;
 
    string parts[];
    int n = StringSplit(ObjectGetString(0, name, OBJPROP_TEXT), '|', parts);
-   for(int p = 0; p < PATTERN_COUNT && p < n; p++)
+   for(int p = 0; p < PATTERN_SCAN_COUNT && p < n; p++)
       patScan[p] = (StringToInteger(parts[p]) != 0);
 }
 
@@ -279,7 +279,8 @@ void DrawScanPatternButton(int p)
 
 void DrawScanPatternButtons()
 {
-   for(int p = 0; p < PATTERN_COUNT; p++)
+   // سطوح دیلی و سشن فقط رسم اند و اسکن نمی‌شوند، پس دکمه ای هم ندارند
+   for(int p = 0; p < PATTERN_SCAN_COUNT; p++)
       DrawScanPatternButton(p);
 }
 
@@ -300,7 +301,7 @@ bool SyncPatternsFromHunterChart()
          if(nParts < 3 + PATTERN_COUNT) return false;   // اندیکاتور نسخه قدیمی
 
          bool changed = false;
-         for(int p = 0; p < PATTERN_COUNT; p++)
+         for(int p = 0; p < PATTERN_SCAN_COUNT; p++)
          {
             bool v = (StringToInteger(parts[3 + p]) != 0);
             if(v != patScan[p]) { patScan[p] = v; changed = true; }
@@ -339,11 +340,18 @@ void WritePatternsToHunterCharts()
          if(nParts >= 3)
          {
             string txt = parts[0] + "|" + parts[1] + "|" + parts[2];
-            for(int p = 0; p < PATTERN_COUNT; p++)
+
+            // اسکنر فقط صاحب سه تیک اول است. تیک سطوح دیلی و سشن مال
+            // اندیکاتور چارت است و اگر اینجا بازنویسی شود، انتخاب کاربر
+            // بی سروصدا برمی‌گردد به حالت روشن.
+            for(int p = 0; p < PATTERN_SCAN_COUNT; p++)
             {
                txt += "|";
                txt += patScan[p] ? "1" : "0";
             }
+            for(int i = 3 + PATTERN_SCAN_COUNT; i < nParts; i++)
+               txt += "|" + parts[i];
+
             ObjectSetString(id, obj, OBJPROP_TEXT, txt);
          }
       }
@@ -1714,7 +1722,7 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam,
    if(StringFind(sparam, patPrefix) == 0)
    {
       int p = (int)StringToInteger(StringSubstr(sparam, StringLen(patPrefix)));
-      if(p >= 0 && p < PATTERN_COUNT)
+      if(p >= 0 && p < PATTERN_SCAN_COUNT)
       {
          patScan[p] = !patScan[p];
          SaveScanPatState();

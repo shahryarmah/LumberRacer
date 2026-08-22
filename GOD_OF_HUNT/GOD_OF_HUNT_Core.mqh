@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                                        GOD_OF_HUNT_Core.mqh   v1.15   |
+//|                                        GOD_OF_HUNT_Core.mqh   v1.16   |
 //|                                                                  |
 //| منطق مشترک تشخیص سویینگ و چرخه عمر الگوی ABCD.                   |
 //| هم GOD_OF_HUNT.mq5 (اندیکاتور چارت) و هم GOD_OF_HUNT_Scanner.mq5           |
@@ -123,7 +123,7 @@ int UiPx(int px) { return (int)MathRound(px * UiScale()); }
 #define UI_BTN_GAP    10   // فاصله افقی دکمه ها تا لیست بازشو
 #define UI_LIST_ROW   25   // فاصله ردیف های لیست تایم فریم
 #define UI_TEXT_ROW   20   // فاصله ردیف های متنی زیر دکمه ها
-#define UI_BTN_ROWS    6   // ۳ دکمه تایم فریم + ۳ دکمه الگو
+#define UI_BTN_ROWS    4   // ۳ دکمه تایم فریم + دکمهٔ PATTERNS
 
 #define UI_FONT_BTN    9   // فونت دکمه ها
 #define UI_FONT_BIG   11   // فونت تایمر کندل
@@ -235,20 +235,57 @@ bool ScanAllHistory      = false;
 // الگوهای قابل انتخاب. هر الگو در هر دو اندیکاتور یک دکمه تیک دارد:
 // در اسکنر یعنی «اسکن بشود یا نه» و در اندیکاتور چارت یعنی «رسم بشود یا نه».
 // الگوی سوم بعدا به همین لیست اضافه می‌شود.
+// سه تای اول «الگو» هستند: تشخیص دارند، چرخه عمر دارند و اسکنر لیستشان
+// می‌کند. پنج تای بعدی «سطح» اند: قیمت ثابتی که یک بار حساب می‌شود و تا
+// پایان روز سر جایش می‌ماند. اسکنر با آنها کاری ندارد.
 enum PatternId
 {
    PATTERN_AB_HUNT = 0,   // الگوی ABCD (شکار نقدینگی)
    PATTERN_INSIDE_BAR = 1,
-   PATTERN_TICK_FRACTAL = 2
+   PATTERN_TICK_FRACTAL = 2,
+   PATTERN_DAILY_HL = 3,      // های و لوی کندل دیروز
+   PATTERN_SESS_SYDNEY = 4,   // های و لوی سشن، همان روز
+   PATTERN_SESS_TOKYO = 5,
+   PATTERN_SESS_LONDON = 6,
+   PATTERN_SESS_NEWYORK = 7
 };
 
-#define PATTERN_COUNT 3
+#define PATTERN_COUNT       8   // همهٔ تیک ها، برای آبجکت وضعیت
+#define PATTERN_SCAN_COUNT  3   // فقط آنهایی که اسکنر می‌شناسد
+#define SESSION_COUNT       4
+
+// اولین سطح سشن در شمارش الگوها؛ اندیس سشن = p - PATTERN_SESS_FIRST
+#define PATTERN_SESS_FIRST  PATTERN_SESS_SYDNEY
+
+bool IsScannablePattern(int p) { return (p < PATTERN_SCAN_COUNT); }
+bool IsSessionLevel(int p)     { return (p >= PATTERN_SESS_FIRST && p < PATTERN_COUNT); }
+
+string SessionName(int idx)
+{
+   if(idx == 0) return "SYDNEY";
+   if(idx == 1) return "TOKYO";
+   if(idx == 2) return "LONDON";
+   if(idx == 3) return "NEW YORK";
+   return "?";
+}
+
+// کد کوتاه برای برچسب کنار خط
+string SessionShort(int idx)
+{
+   if(idx == 0) return "SYD";
+   if(idx == 1) return "TKY";
+   if(idx == 2) return "LDN";
+   if(idx == 3) return "NY";
+   return "?";
+}
 
 string PatternName(int p)
 {
    if(p == PATTERN_AB_HUNT)      return "AB HUNT";
    if(p == PATTERN_INSIDE_BAR)   return "INSIDE BAR";
    if(p == PATTERN_TICK_FRACTAL) return "TICK FRACTAL";
+   if(p == PATTERN_DAILY_HL)     return "H/L DAILY";
+   if(IsSessionLevel(p))         return SessionName(p - PATTERN_SESS_FIRST) + " H/L";
    return "?";
 }
 

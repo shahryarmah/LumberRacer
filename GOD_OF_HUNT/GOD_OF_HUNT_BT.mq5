@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
-//|                                            GOD_OF_HUNT_BT.mq5   v1.15   |
+//|                                            GOD_OF_HUNT_BT.mq5   v1.16   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "1.15"
+#property version   "1.16"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
@@ -124,6 +124,21 @@ input int    LondonCloseGMT       = 16;
 input int    NewYorkOpenGMT       = 12;
 input int    NewYorkCloseGMT      = 21;
 
+//==================== سطوح دیلی و سشن ====================
+input group "=== سطوح افقی (دیلی و سشن) ==="
+// این ها «الگو» نیستند، «سطح» اند: یک قیمت ثابت که در مرز روز یا مرز سشن
+// یک بار حساب می‌شود و تا پایان روز جاری سر جایش می‌ماند. برای همین هم
+// بازحسابشان به تغییر روز/سشن گره خورده، نه به هر تیک.
+input color  DailyLevelColor    = clrCrimson;      // های و لوی کندل دیروز
+input color  SydneyLevelColor   = clrDarkGreen;
+input color  TokyoLevelColor    = clrSaddleBrown;
+input color  LondonLevelColor   = clrNavy;
+input color  NewYorkLevelColor  = clrDarkMagenta;
+input int    LevelLineWidth     = 1;
+input bool   ShowLevelLabels    = true;            // برچسب کوتاه انتهای خط
+input ENUM_TIMEFRAMES SessionLevelsMaxTF = PERIOD_H4; // سطح سشن فقط تا این تایم فریم
+input ENUM_TIMEFRAMES SessionDataTF      = PERIOD_H1; // منبع های/لوی داخل سشن
+
 // الگوی مرده/منقضی بی سروصدا حذف نمی‌شود؛ تا انتهای همان روز خاکستری روی
 // چارت می‌ماند و علت ابطالش نوشته می‌شود، تا بشود بررسی کرد که اندیکاتور
 // درست حذفش کرده یا نه. ورودی هایش در دسته «عمومی» بالا هستند.
@@ -140,6 +155,209 @@ int idxEntry     = 8;   // M1
 // تایم فریم در آبجکت مخفی وضعیت ذخیره می‌شود، چون OnInit با هر تغییر تایم
 // فریم دوباره اجرا می‌شود و متغیر سراسری صفر می‌شود.
 bool patternOn[PATTERN_COUNT];
+
+#define LEVEL_PREFIX "gohlv_"
+
+// وضعیت کش شده. تا وقتی این ها عوض نشده اند هیچ آبجکتی دست نمی‌خورد.
+datetime lvlDayStart   = 0;                  // کندل D1 جاری که سطوح با آن رسم شد
+datetime lvlSessDrawn[SESSION_COUNT];        // زمان بستهٔ سشنی که رسم شده
+bool     lvlOnDrawn[PATTERN_COUNT];          // تیک هر سطح در زمان رسم
+
+//+------------------------------------------------------------------+
+int SessionOpenGMT(int idx)
+{
+   if(idx == 0) return SydneyOpenGMT;
+   if(idx == 1) return TokyoOpenGMT;
+   if(idx == 2) return LondonOpenGMT;
+   return NewYorkOpenGMT;
+}
+
+int SessionCloseGMT(int idx)
+{
+   if(idx == 0) return SydneyCloseGMT;
+   if(idx == 1) return TokyoCloseGMT;
+   if(idx == 2) return LondonCloseGMT;
+   return NewYorkCloseGMT;
+}
+
+color SessionLevelColor(int idx)
+{
+   if(idx == 0) return SydneyLevelColor;
+   if(idx == 1) return TokyoLevelColor;
+   if(idx == 2) return LondonLevelColor;
+   return NewYorkLevelColor;
+}
+
+//+------------------------------------------------------------------+
+// یک خط افقی سطح، به علاوهٔ برچسب کوتاهش.
+void DrawLevelLine(string id, datetime from, datetime to, double price,
+                   color clr, string tag)
+{
+   string ln = LEVEL_PREFIX + id;
+   if(ObjectFind(0, ln) >= 0) ObjectDelete(0, ln);
+   ObjectCreate(0, ln, OBJ_TREND, 0, from, price, to, price);
+   ObjectSetInteger(0, ln, OBJPROP_COLOR, clr);
+   ObjectSetInteger(0, ln, OBJPROP_WIDTH, LevelLineWidth);
+   ObjectSetInteger(0, ln, OBJPROP_RAY_RIGHT, false);
+   ObjectSetInteger(0, ln, OBJPROP_SELECTABLE, false);
+
+   string tx = ln + "_T";
+   if(ObjectFind(0, tx) >= 0) ObjectDelete(0, tx);
+   if(!ShowLevelLabels) return;
+
+   ObjectCreate(0, tx, OBJ_TEXT, 0, to, price);
+   ObjectSetInteger(0, tx, OBJPROP_COLOR, clr);
+   ObjectSetInteger(0, tx, OBJPROP_FONTSIZE, 8);
+   ObjectSetInteger(0, tx, OBJPROP_ANCHOR, ANCHOR_RIGHT_LOWER);
+   ObjectSetInteger(0, tx, OBJPROP_SELECTABLE, false);
+   ObjectSetString(0, tx, OBJPROP_TEXT, tag + " ");
+}
+
+void DeleteLevelGroup(string id)
+{
+   string ln = LEVEL_PREFIX + id;
+   ObjectDelete(0, ln);
+   ObjectDelete(0, ln + "_T");
+}
+
+//+------------------------------------------------------------------+
+// پنجرهٔ آخرین سشنی که *امروز* بسته شده، به وقت سرور.
+// سشنی که از دیروز شروع شده و امروز بسته می‌شود (مثل سیدنی) هم درست
+// حساب می‌شود، چون مبنا لحظهٔ بسته شدن است نه لحظهٔ باز شدن.
+// برگشتی false یعنی این سشن هنوز امروز بسته نشده.
+bool SessionWindowToday(int idx, datetime &fromSrv, datetime &toSrv)
+{
+   datetime gmtNow = TimeGMT();
+   if(gmtNow == 0) return false;
+
+   long shift = (long)gmtNow - (long)TimeCurrent();   // سرور + shift = GMT
+
+   int openH  = SessionOpenGMT(idx);
+   int closeH = SessionCloseGMT(idx);
+   int durH   = (closeH - openH + 24) % 24;
+   if(durH == 0) durH = 24;
+
+   datetime dayStartGmt = (datetime)((long)gmtNow - (long)gmtNow % 86400);
+   datetime closeGmt    = dayStartGmt + closeH * 3600;
+   if(closeGmt > gmtNow) return false;                // هنوز امروز بسته نشده
+
+   fromSrv = (datetime)((long)(closeGmt - durH * 3600) - shift);
+   toSrv   = (datetime)((long)closeGmt - shift);
+   return true;
+}
+
+// بیشترین های و کمترین لوی بازهٔ داده شده، از SessionDataTF.
+// ساعت باز/بستهٔ سشن ها عدد صحیح اند، پس H1 دقیقا روی مرز می‌افتد و
+// های/لوی واقعی سشن را می‌دهد.
+bool RangeHighLow(datetime fromSrv, datetime toSrv, double &hi, double &lo)
+{
+   MqlRates r[];
+   ArraySetAsSeries(r, false);
+   int n = CopyRates(_Symbol, SessionDataTF, fromSrv, toSrv - 1, r);
+   if(n <= 0) return false;                           // داده آماده نیست
+
+   hi = r[0].high;
+   lo = r[0].low;
+   for(int i = 1; i < n; i++)
+   {
+      if(r[i].high > hi) hi = r[i].high;
+      if(r[i].low  < lo) lo = r[i].low;
+   }
+   return true;
+}
+
+
+//+------------------------------------------------------------------+
+// نسخهٔ بک‌تست: به جای فقط روز جاری، برای *هر روز* داخل بازهٔ انتخابی رسم
+// می‌شود. بازه از ورودی می‌آید و بدون بارگذاری دوباره عوض نمی‌شود، پس یک
+// بار حساب می‌شود و تا وقتی بازه و تیک ها ثابت اند هیچ آبجکتی دست نمی‌خورد.
+string lvlRangeSig = "";
+
+void DeleteAllLevels()
+{
+   int total = ObjectsTotal(0);
+   for(int i = total - 1; i >= 0; i--)
+   {
+      string nm = ObjectName(0, i);
+      if(StringFind(nm, LEVEL_PREFIX) == 0) ObjectDelete(0, nm);
+   }
+}
+
+void UpdateLevels(bool active)
+{
+   if(!active)
+   {
+      if(StringLen(lvlRangeSig) > 0) { DeleteAllLevels(); lvlRangeSig = ""; }
+      return;
+   }
+
+   string sig = IntegerToString((long)BtFrom) + "/" + IntegerToString((long)BtTo) +
+                "/" + IntegerToString(Period());
+   for(int p = PATTERN_DAILY_HL; p < PATTERN_COUNT; p++)
+      sig += patternOn[p] ? "1" : "0";
+   if(sig == lvlRangeSig) return;
+
+   DeleteAllLevels();
+   lvlRangeSig = sig;
+
+   datetime fromT = 0, toT = 0;
+   BtDataRange(PERIOD_D1, fromT, toT);
+
+   MqlRates d1[];
+   ArraySetAsSeries(d1, false);
+   int nd = CopyRates(_Symbol, PERIOD_D1, fromT, toT, d1);
+   if(nd < 2) { lvlRangeSig = ""; return; }   // داده آماده نیست، دوباره تلاش شود
+
+   bool dailyOn     = patternOn[PATTERN_DAILY_HL];
+   bool sessAllowed = (Period() <= (int)SessionLevelsMaxTF);
+   long shift       = (long)TimeGMT() - (long)TimeCurrent();
+
+   // d1[k] روز جاری، d1[k-1] روز قبلش
+   for(int k = 1; k < nd; k++)
+   {
+      datetime dayStart = d1[k].time;
+      datetime dayEnd   = dayStart + PeriodSeconds(PERIOD_D1);
+      if(!InBtRange(dayStart)) continue;
+
+      string sfx = IntegerToString((long)dayStart);
+
+      if(dailyOn)
+      {
+         DrawLevelLine("DH" + sfx, dayStart, dayEnd, d1[k-1].high, DailyLevelColor, "PDH");
+         DrawLevelLine("DL" + sfx, dayStart, dayEnd, d1[k-1].low,  DailyLevelColor, "PDL");
+      }
+
+      if(!sessAllowed) continue;
+
+      for(int i = 0; i < SESSION_COUNT; i++)
+      {
+         int p = PATTERN_SESS_FIRST + i;
+         if(!patternOn[p]) continue;
+
+         int openH  = SessionOpenGMT(i);
+         int closeH = SessionCloseGMT(i);
+         int durH   = (closeH - openH + 24) % 24;
+         if(durH == 0) durH = 24;
+
+         // مرز روز به وقت GMT، از روی همین کندل روزانه
+         datetime dayGmt = (datetime)((long)dayStart + shift);
+         dayGmt = (datetime)((long)dayGmt - (long)dayGmt % 86400);
+
+         datetime closeGmt = dayGmt + closeH * 3600;
+         datetime a = (datetime)((long)(closeGmt - durH * 3600) - shift);
+         datetime b = (datetime)((long)closeGmt - shift);
+
+         double hi = 0.0, lo = 0.0;
+         if(!RangeHighLow(a, b, hi, lo)) continue;
+
+         string tag = SessionShort(i);
+         color  clr = SessionLevelColor(i);
+         DrawLevelLine("S" + IntegerToString(i) + "H" + sfx, dayStart, dayEnd, hi, clr, tag + " H");
+         DrawLevelLine("S" + IntegerToString(i) + "L" + sfx, dayStart, dayEnd, lo, clr, tag + " L");
+      }
+   }
+}
+
 
 //--- آبجکت ذخیره سازی محلی مخصوص این چارت
 string stateObjName;
@@ -245,6 +463,16 @@ void DeleteLiveObjectsOfTF(TFCategory cat, ENUM_TIMEFRAMES tf)
 //   TICK FRACTAL -> "TK"
 bool ObjectBelongsToPattern(string name, int p)
 {
+   if(StringFind(name, LEVEL_PREFIX) == 0)
+   {
+      string rest = StringSubstr(name, StringLen(LEVEL_PREFIX));
+      if(p == PATTERN_DAILY_HL) return (StringSubstr(rest, 0, 1) == "D");
+      if(IsSessionLevel(p))
+         return (StringSubstr(rest, 0, 2) == "S" +
+                 IntegerToString(p - PATTERN_SESS_FIRST));
+      return false;
+   }
+
    if(StringFind(name, "gbtst_") != 0 &&
       StringFind(name, "gbttr_") != 0 &&
       StringFind(name, "gbten_") != 0) return false;
@@ -465,8 +693,51 @@ string PatternButtonName(int p)
    return "GBT_BtnPat" + IntegerToString(p) + "_" + IntegerToString(ChartID());
 }
 
+// هشت الگو/سطح داریم و هشت دکمه چارت را می‌پوشاند. پس مثل دکمه های تایم
+// فریم، یک دکمهٔ «PATTERNS» داریم که لیستی باز می‌کند.
+//
+// تفاوت با لیست تایم فریم: آنجا یکی انتخاب می‌شود و لیست بسته می‌شود،
+// اینجا چند تیک مستقل اند پس لیست باز می‌ماند تا دوباره روی PATTERNS
+// کلیک شود.
+bool isPatternListOpen = false;
+
+string PatternHeadButtonName()
+{
+   return "GBT_BtnPatHead_" + IntegerToString(ChartID());
+}
+
+void DrawPatternHeadButton()
+{
+   string name = PatternHeadButtonName();
+
+   if(ObjectFind(0, name) < 0)
+   {
+      ObjectCreate(0, name, OBJ_BUTTON, 0, 0, 0);
+      ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+      ObjectSetInteger(0, name, OBJPROP_BORDER_TYPE, BORDER_FLAT);
+   }
+
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, UiPanelX());
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, UiBtnY(3));
+   ObjectSetInteger(0, name, OBJPROP_XSIZE, UiPx(UI_BTN_W));
+   ObjectSetInteger(0, name, OBJPROP_YSIZE, UiPx(UI_BTN_H));
+   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, UI_FONT_BTN);
+   ObjectSetInteger(0, name, OBJPROP_STATE, false);
+   ObjectSetInteger(0, name, OBJPROP_BGCOLOR, clrDodgerBlue);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, clrWhite);
+
+   int on = 0;
+   for(int p = 0; p < PATTERN_COUNT; p++) if(patternOn[p]) on++;
+   ObjectSetString(0, name, OBJPROP_TEXT,
+                   "PATTERNS (" + IntegerToString(on) + "/" +
+                   IntegerToString(PATTERN_COUNT) + ")");
+}
+
+// یک ردیف لیست الگوها. فقط وقتی لیست باز است ساخته می‌شود.
 void DrawPatternButton(int p)
 {
+   if(!isPatternListOpen) return;
+
    string name = PatternButtonName(p);
 
    if(ObjectFind(0, name) < 0)
@@ -476,10 +747,8 @@ void DrawPatternButton(int p)
       ObjectSetInteger(0, name, OBJPROP_BORDER_TYPE, BORDER_FLAT);
    }
 
-   // هندسه بیرون از بلوک ساخت است تا با عوض شدن مانیتور یا UIScalePercent،
-   // دکمه ای که از قبل روی چارت مانده هم جابه‌جا و هم‌اندازه شود.
-   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, UiPanelX());
-   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, UiBtnY(3 + p));
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, UiListX());
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, UiBtnY(0) + UiPx(UI_LIST_ROW) * p);
    ObjectSetInteger(0, name, OBJPROP_XSIZE, UiPx(UI_BTN_W));
    ObjectSetInteger(0, name, OBJPROP_YSIZE, UiPx(UI_BTN_H));
    ObjectSetInteger(0, name, OBJPROP_FONTSIZE, UI_FONT_BTN);
@@ -493,8 +762,17 @@ void DrawPatternButton(int p)
 
 void DrawPatternButtons()
 {
+   DrawPatternHeadButton();
    for(int p = 0; p < PATTERN_COUNT; p++)
       DrawPatternButton(p);
+}
+
+void HidePatternList()
+{
+   isPatternListOpen = false;
+   for(int p = 0; p < PATTERN_COUNT; p++)
+      ObjectDelete(0, PatternButtonName(p));
+   DrawPatternHeadButton();
 }
 
 // آبجکت وضعیت مرجع مشترک انتخاب الگوهاست: اسکنر هم می‌تواند در آن بنویسد
@@ -815,6 +1093,7 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
    if(id == CHARTEVENT_OBJECT_CLICK)
    {
       bool isOurObject = (sparam == btnStructName || sparam == btnTrigName || sparam == btnEntryName ||
+                          sparam == PatternHeadButtonName() ||
                           StringFind(sparam, "GBT_BtnPat")  == 0 ||
                           StringFind(sparam, "GBT_ListSt_") == 0 ||
                           StringFind(sparam, "GBT_ListTr_") == 0 ||
@@ -832,6 +1111,25 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
       lastClickTime       = now;
       lastObjectClickTime = now;
 
+      if(sparam == PatternHeadButtonName())
+      {
+         if(isPatternListOpen)
+            HidePatternList();
+         else
+         {
+            HideTFList(currentListCategory);
+            isStructureListOpen = false;
+            isTriggerListOpen   = false;
+            isEntryListOpen     = false;
+            currentListCategory = NONE;
+
+            isPatternListOpen = true;
+            DrawPatternButtons();
+         }
+         ChartRedraw();
+         return;
+      }
+
       if(StringFind(sparam, "GBT_BtnPat") == 0)
       {
          // نام: GBT_BtnPat<p>_<chartID>
@@ -840,6 +1138,7 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
          {
             patternOn[p] = !patternOn[p];
             DrawPatternButton(p);
+            DrawPatternHeadButton();
             SaveState();
 
             // آبجکت های الگوی خاموش شده در همه تایم فریم ها پاک می‌شوند،
@@ -856,6 +1155,7 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
       if(sparam == btnStructName)
       {
          if(currentListCategory != STRUCTURE) HideTFList(currentListCategory);
+         if(isPatternListOpen) HidePatternList();
          if(!isStructureListOpen) ShowTFList(STRUCTURE, UiListX(), UiBtnY(0));
          isStructureListOpen = true;
          isTriggerListOpen   = false;
@@ -865,6 +1165,7 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
       else if(sparam == btnTrigName)
       {
          if(currentListCategory != TRIGGER) HideTFList(currentListCategory);
+         if(isPatternListOpen) HidePatternList();
          if(!isTriggerListOpen) ShowTFList(TRIGGER, UiListX(), UiBtnY(0));
          isTriggerListOpen   = true;
          isStructureListOpen = false;
@@ -874,6 +1175,7 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
       else if(sparam == btnEntryName)
       {
          if(currentListCategory != ENTRY) HideTFList(currentListCategory);
+         if(isPatternListOpen) HidePatternList();
          if(!isEntryListOpen) ShowTFList(ENTRY, UiListX(), UiBtnY(0));
          isEntryListOpen     = true;
          isStructureListOpen = false;
@@ -1400,6 +1702,10 @@ void ProcessIndicator()
    }
 
    TFCategory cat = GetCategory();
+
+   // سطوح افقی به دستهٔ تایم فریم وابسته نیستند
+   UpdateLevels(cat != NONE);
+
    if(cat == NONE) return;
 
    int maxLookback = 0;
@@ -1617,6 +1923,7 @@ void OnDeinit(const int reason)
             StringFind(name, "GBT_BtnTrigger_") == 0 ||
             StringFind(name, "GBT_BtnEntry_") == 0 ||
             StringFind(name, "GBT_BtnPat") == 0 ||
+            StringFind(name, LEVEL_PREFIX) == 0 ||
             StringFind(name, "GBT_State_") == 0 ||
             StringFind(name, "GBT_Cfg_") == 0 ||
             StringFind(name, "GBT_Timer_") == 0 ||
