@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
-//|                                            GOD_OF_HUNT.mq5   v1.17   |
+//|                                            GOD_OF_HUNT.mq5   v1.18   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "1.17"
+#property version   "1.18"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
@@ -137,6 +137,8 @@ bool patternOn[PATTERN_COUNT];
 
 // وضعیت کش شده. تا وقتی این ها عوض نشده اند هیچ آبجکتی دست نمی‌خورد.
 datetime lvlDayStart   = 0;                  // کندل D1 جاری که سطوح با آن رسم شد
+datetime lvlDayEnd     = 0;                  // پایان همان روز
+datetime lvlNextTry    = 0;                  // زودترین تلاش دوباره وقتی داده آماده نبود
 datetime lvlSessDrawn[SESSION_COUNT];        // زمان بستهٔ سشنی که رسم شده
 bool     lvlOnDrawn[PATTERN_COUNT];          // تیک هر سطح در زمان رسم
 
@@ -256,62 +258,94 @@ bool RangeHighLow(datetime fromSrv, datetime toSrv, double &hi, double &lo)
 }
 
 //+------------------------------------------------------------------+
+// همهٔ آبجکت های سطح. موقع OnInit یک بار صدا زده می‌شود تا هیچ خط جامانده ای
+// از اجرای قبلی نماند (آبجکت ها با تعویض تایم فریم روی چارت می‌مانند ولی
+// پرچم های حافظه صفر می‌شوند).
+void DeleteAllLevels()
+{
+   int total = ObjectsTotal(0);
+   for(int i = total - 1; i >= 0; i--)
+   {
+      string nm = ObjectName(0, i);
+      if(StringFind(nm, LEVEL_PREFIX) == 0) ObjectDelete(0, nm);
+   }
+}
+
+//+------------------------------------------------------------------+
 // سطوح دیلی و سشن.
 //
-// active=false یعنی تایم فریم چارت جزو سه تایم فریم انتخابی نیست؛ همه چیز
-// پاک می‌شود. وگرنه فقط وقتی کاری انجام می‌شود که روز عوض شده باشد، سشنی
-// تازه بسته شده باشد، یا تیک یکی از سطوح عوض شده باشد.
-void UpdateLevels(bool active)
+// روی *همهٔ* تایم فریم ها رسم می‌شوند. اینها سطح مطلق قیمت اند و ربطی به
+// اینکه چارت روی استراکچر/تریگر/اینتری باشد یا نه ندارند.
+//
+// هزینه: تا وقتی روز عوض نشده، تیکی عوض نشده و سشنی تازه بسته نشده، حتی
+// یک فراخوانی داده هم زده نمی‌شود. تصمیم گیری فقط حساب عددی است.
+void UpdateLevels()
 {
-   if(!active)
+   datetime now = TimeCurrent();
+   if(now == 0) return;
+
+   // --- آیا اصلا کاری هست؟
+   bool togglesChanged = false;
+   for(int p = PATTERN_DAILY_HL; p < PATTERN_COUNT; p++)
+      if(patternOn[p] != lvlOnDrawn[p]) { togglesChanged = true; break; }
+
+   bool dayOver = (lvlDayStart == 0 || now >= lvlDayEnd);
+
+   bool sessionDue = false;
+   if(lvlDayStart != 0 && !dayOver)
    {
-      DeleteLevelGroup("DH"); DeleteLevelGroup("DL");
       for(int i = 0; i < SESSION_COUNT; i++)
       {
-         DeleteLevelGroup("S" + IntegerToString(i) + "H");
-         DeleteLevelGroup("S" + IntegerToString(i) + "L");
-         lvlSessDrawn[i] = 0;
+         int p = PATTERN_SESS_FIRST + i;
+         if(!patternOn[p]) continue;
+         datetime a = 0, b = 0;
+         if(SessionWindowOfDay(i, lvlDayStart, a, b) && b <= now && b != lvlSessDrawn[i])
+         { sessionDue = true; break; }
       }
-      lvlDayStart = 0;
-      return;
    }
 
-   // --- مرزهای روز جاری، از خود کندل D1 تا با چیزی که چارت نشان می‌دهد یکی باشد
+   if(!dayOver && !togglesChanged && !sessionDue) return;
+   if(now < lvlNextTry) return;   // بعد از یک شکست، بلافاصله دوباره تلاش نکن
+
+   // --- مرزهای روز، از خود کندل D1 تا با محور زمان چارت یکی باشد
    MqlRates d1[];
    ArraySetAsSeries(d1, false);
    int nd = CopyRates(_Symbol, PERIOD_D1, 0, 2, d1);
-   if(nd < 2) return;                                 // تاریخچه آماده نیست
+   if(nd < 2) { lvlNextTry = now + 5; return; }
 
-   datetime dayStart = d1[1].time;                    // کندل امروز
-
-   // موقع باز شدن چارت، سری D1 ممکن است هنوز همگام نشده باشد و کندل
-   // «امروزِ» آن مال روزهای قبل باشد — که خط ها را جای غلط می‌اندازد و تازه
-   // با تعویض تایم فریم درست می‌شود. تا وقتی کندل روزانه لحظهٔ جاری را
-   // پوشش ندهد، چیزی رسم نمی‌شود و پاس بعد دوباره تلاش می‌شود.
-   if(TimeCurrent() >= dayStart + PeriodSeconds(PERIOD_D1)) return;
+   datetime dayStart = d1[1].time;
    datetime dayEnd   = dayStart + PeriodSeconds(PERIOD_D1);
-   bool     newDay   = (dayStart != lvlDayStart);
 
-   // --- های و لوی کندل دیروز
+   // موقع باز شدن چارت سری D1 هنوز همگام نیست و کندل «امروزِ» آن مال روزهای
+   // قبل است؛ رسم با آن، خط ها را جای غلط می‌اندازد.
+   if(now >= dayEnd) { lvlNextTry = now + 5; return; }
+
+   bool newDay = (dayStart != lvlDayStart);
+
+   // --- های و لوی کندل دیروز. سقف تایم فریم ندارد.
    bool dailyOn = patternOn[PATTERN_DAILY_HL];
-   if(dailyOn && (newDay || !lvlOnDrawn[PATTERN_DAILY_HL]))
+   if(dailyOn)
    {
-      DrawLevelLine("DH", dayStart, dayEnd, d1[0].high, DailyLevelColor, "PDH");
-      DrawLevelLine("DL", dayStart, dayEnd, d1[0].low,  DailyLevelColor, "PDL");
+      if(newDay || !lvlOnDrawn[PATTERN_DAILY_HL])
+      {
+         DrawLevelLine("DH", dayStart, dayEnd, d1[0].high, DailyLevelColor, "PDH");
+         DrawLevelLine("DL", dayStart, dayEnd, d1[0].low,  DailyLevelColor, "PDL");
+      }
    }
-   else if(!dailyOn && lvlOnDrawn[PATTERN_DAILY_HL])
+   else if(lvlOnDrawn[PATTERN_DAILY_HL])
    {
       DeleteLevelGroup("DH"); DeleteLevelGroup("DL");
    }
    lvlOnDrawn[PATTERN_DAILY_HL] = dailyOn;
 
-   // --- سطوح سشن. روی تایم فریم بالا معنی ندارند.
+   // --- سطوح سشن
    bool sessAllowed = (Period() <= (int)SessionLevelsMaxTF);
+   bool anyFailed   = false;
 
    for(int i = 0; i < SESSION_COUNT; i++)
    {
-      int  p  = PATTERN_SESS_FIRST + i;
-      bool on = (patternOn[p] && sessAllowed);
+      int  p   = PATTERN_SESS_FIRST + i;
+      bool on  = (patternOn[p] && sessAllowed);
       string idH = "S" + IntegerToString(i) + "H";
       string idL = "S" + IntegerToString(i) + "L";
 
@@ -323,35 +357,34 @@ void UpdateLevels(bool active)
          continue;
       }
 
-      datetime fromSrv = 0, toSrv = 0;
-      bool closed = SessionWindowOfDay(i, dayStart, fromSrv, toSrv) &&
-                    toSrv <= TimeCurrent();
-      if(!closed)
+      if(newDay)   // خط دیروز نباید بماند
       {
-         // امروز هنوز بسته نشده: خط دیروز نباید بماند
-         if(newDay && lvlOnDrawn[p]) { DeleteLevelGroup(idH); DeleteLevelGroup(idL); }
-         if(newDay) lvlSessDrawn[i] = 0;
-         lvlOnDrawn[p] = on;
-         continue;
+         DeleteLevelGroup(idH); DeleteLevelGroup(idL);
+         lvlSessDrawn[i] = 0;
       }
 
-      // فقط وقتی سشن تازه بسته شده یا تیکش تازه روشن شده
-      if(toSrv != lvlSessDrawn[i] || !lvlOnDrawn[p])
-      {
-         double hi = 0.0, lo = 0.0;
-         if(RangeHighLow(fromSrv, toSrv, hi, lo))
-         {
-            string tag = SessionShort(i);
-            color  clr = SessionLevelColor(i);
-            DrawLevelLine(idH, dayStart, dayEnd, hi, clr, tag + " H");
-            DrawLevelLine(idL, dayStart, dayEnd, lo, clr, tag + " L");
-            lvlSessDrawn[i] = toSrv;
-         }
-      }
-      lvlOnDrawn[p] = on;
+      datetime fromSrv = 0, toSrv = 0;
+      bool closed = SessionWindowOfDay(i, dayStart, fromSrv, toSrv) && toSrv <= now;
+
+      lvlOnDrawn[p] = true;      // تیکش روشن است؛ چه رسم شده باشد چه هنوز نه
+      if(!closed) continue;      // امروز هنوز بسته نشده
+      if(toSrv == lvlSessDrawn[i]) continue;   // همین الان رسم شده
+
+      double hi = 0.0, lo = 0.0;
+      if(!RangeHighLow(fromSrv, toSrv, hi, lo)) { anyFailed = true; continue; }
+
+      string tag = SessionShort(i);
+      color  clr = SessionLevelColor(i);
+      DrawLevelLine(idH, dayStart, dayEnd, hi, clr, tag + " H");
+      DrawLevelLine(idL, dayStart, dayEnd, lo, clr, tag + " L");
+      lvlSessDrawn[i] = toSrv;
    }
 
+   // دادهٔ SessionDataTF هنوز آماده نبود؛ چند ثانیه بعد دوباره، نه هر تیک
+   lvlNextTry = anyFailed ? now + 5 : 0;
+
    lvlDayStart = dayStart;
+   lvlDayEnd   = dayEnd;
 }
 
 
@@ -1069,10 +1102,15 @@ int OnInit()
    fractLabelCleared = false;
    panelScaleApplied = UiScale();
 
-   // کش سطوح هم صفر می‌شود تا یک بار دوباره حساب و رسم شوند
+   // کش سطوح صفر می‌شود و آبجکت های جامانده یک بار پاک می‌شوند. آبجکت ها با
+   // تعویض تایم فریم روی چارت می‌مانند ولی پرچم ها صفر می‌شوند، پس بدون این
+   // پاکسازی خط الگوی خاموش شده تا ابد می‌ماند.
    lvlDayStart = 0;
+   lvlDayEnd   = 0;
+   lvlNextTry  = 0;
    for(int i = 0; i < SESSION_COUNT; i++) lvlSessDrawn[i] = 0;
    for(int p = 0; p < PATTERN_COUNT; p++) lvlOnDrawn[p] = false;
+   DeleteAllLevels();
 
    EventSetTimer(1);
 
@@ -1684,9 +1722,9 @@ void ProcessIndicator()
 
    TFCategory cat = GetCategory();
 
-   // سطوح افقی به دستهٔ تایم فریم وابسته نیستند، فقط باید روی یکی از سه
-   // تایم فریم انتخابی باشیم. خودشان تصمیم می‌گیرند که کاری لازم است یا نه.
-   UpdateLevels(cat != NONE);
+   // سطوح افقی سطح مطلق قیمت اند و به دستهٔ تایم فریم ربطی ندارند، پس روی
+   // *هر* تایم فریمی رسم می‌شوند — حتی تایم فریمی که جزو سه دکمه نیست.
+   UpdateLevels();
 
    if(cat == NONE) return;
 

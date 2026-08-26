@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
-//|                                            GOD_OF_HUNT_BT.mq5   v1.17   |
+//|                                            GOD_OF_HUNT_BT.mq5   v1.18   |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "1.17"
+#property version   "1.18"
 #property indicator_chart_window
 #property indicator_plots 0   // هیچ پلاتی ندارد؛ فقط آبجکت رسم می‌کند
 
@@ -296,14 +296,8 @@ void DeleteAllLevels()
    }
 }
 
-void UpdateLevels(bool active)
+void UpdateLevels()
 {
-   if(!active)
-   {
-      if(StringLen(lvlRangeSig) > 0) { DeleteAllLevels(); lvlRangeSig = ""; }
-      return;
-   }
-
    string sig = IntegerToString((long)BtFrom) + "/" + IntegerToString((long)BtTo) +
                 "/" + IntegerToString(Period());
    for(int p = PATTERN_DAILY_HL; p < PATTERN_COUNT; p++)
@@ -1028,6 +1022,7 @@ int OnInit()
    lastConfirmedSig = "";
    staleLayoutSig   = "";
    hadLiveObjects   = false;
+   lvlRangeSig      = "";   // سطوح یک بار دوباره حساب شوند
 
    EventSetTimer(1);
 
@@ -1712,8 +1707,9 @@ void ProcessIndicator()
 
    TFCategory cat = GetCategory();
 
-   // سطوح افقی به دستهٔ تایم فریم وابسته نیستند
-   UpdateLevels(cat != NONE);
+   // سطوح افقی سطح مطلق قیمت اند و به دستهٔ تایم فریم ربطی ندارند، پس روی
+   // هر تایم فریمی رسم می‌شوند.
+   UpdateLevels();
 
    if(cat == NONE) return;
 
