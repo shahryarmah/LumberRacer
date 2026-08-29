@@ -240,3 +240,7 @@ ModelManifest.xml
 
 # FAKE - F# Make
 .fake/
+
+# MQL5 pattern tests: generated translation unit and compiled binary
+MQL5/tests/ThreeCandlePattern.gen.h
+MQL5/tests/test_pattern
