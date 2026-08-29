@@ -38,9 +38,11 @@
 #property indicator_buffers 0
 #property indicator_plots   0
 
-#include <ChartPanel.mqh>
-#include <ThreeCandlePattern.mqh>
-#include <TimeframeSelector.mqh>
+//--- quoted includes resolve next to this file, so all four files live
+//--- together in one folder and nothing has to go into MQL5\Include
+#include "ChartPanel.mqh"
+#include "ThreeCandlePattern.mqh"
+#include "TimeframeSelector.mqh"
 
 //+------------------------------------------------------------------+
 //| Inputs                                                            |

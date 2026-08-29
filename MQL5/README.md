@@ -6,16 +6,24 @@
 
 ## نصب
 
-فایل‌ها را در پوشه‌ی داده‌ی متاتریدر کپی کنید (در متاتریدر: `File → Open Data Folder`):
+در متاتریدر `File → Open Data Folder` را بزنید و کل پوشه‌ی
+`MQL5/Indicators/ThreeCandleLevels/` را با هر چهار فایلش داخل `MQL5\Indicators\`
+کپی کنید:
 
-| از این ریپازیتوری | به این مسیر در متاتریدر |
-|---|---|
-| `MQL5/Indicators/ThreeCandleLevels.mq5` | `MQL5/Indicators/` |
-| `MQL5/Include/ThreeCandlePattern.mqh` | `MQL5/Include/` |
-| `MQL5/Include/TimeframeSelector.mqh` | `MQL5/Include/` |
-| `MQL5/Include/ChartPanel.mqh` | `MQL5/Include/` |
+```
+MQL5\Indicators\ThreeCandleLevels\
+    ThreeCandleLevels.mq5        <- این یکی را کامپایل کنید
+    ChartPanel.mqh
+    ThreeCandlePattern.mqh
+    TimeframeSelector.mqh
+```
 
-سپس `ThreeCandleLevels.mq5` را در MetaEditor باز کرده و با `F7` کامپایل کنید.
+هر چهار فایل باید کنار هم در همین یک پوشه بمانند؛ اندیکاتور با `#include "..."`
+آن‌ها را نسبت به محل خودش پیدا می‌کند، پس هیچ‌چیزی لازم نیست در `MQL5\Include\`
+گذاشته شود.
+
+سپس `ThreeCandleLevels.mq5` را در MetaEditor باز کرده و با `F7` کامپایل کنید. فایل‌های
+`.mqh` کامپایل جداگانه نمی‌خواهند.
 
 ## الگو
 
